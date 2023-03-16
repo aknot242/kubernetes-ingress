@@ -96,7 +96,7 @@ func TestUpstreamNamerForVirtualServer(t *testing.T) {
 			Namespace: "default",
 		},
 	}
-	upstreamNamer := newUpstreamNamerForVirtualServer(&virtualServer)
+	upstreamNamer := NewUpstreamNamerForVirtualServer(&virtualServer)
 	upstream := "test"
 
 	expected := "vs_default_cafe_test"
@@ -121,7 +121,7 @@ func TestUpstreamNamerForVirtualServerRoute(t *testing.T) {
 			Namespace: "default",
 		},
 	}
-	upstreamNamer := newUpstreamNamerForVirtualServerRoute(&virtualServer, &virtualServerRoute)
+	upstreamNamer := NewUpstreamNamerForVirtualServerRoute(&virtualServer, &virtualServerRoute)
 	upstream := "test"
 
 	expected := "vs_default_cafe_vsr_default_coffee_test"
@@ -2956,6 +2956,78 @@ func TestGeneratePolicies(t *testing.T) {
 		{
 			policyRefs: []conf_v1.PolicyReference{
 				{
+					Name:      "jwt-policy-2",
+					Namespace: "default",
+				},
+			},
+			policies: map[string]*conf_v1.Policy{
+				"default/jwt-policy-2": {
+					ObjectMeta: meta_v1.ObjectMeta{
+						Name:      "jwt-policy",
+						Namespace: "default",
+					},
+					Spec: conf_v1.PolicySpec{
+						JWTAuth: &conf_v1.JWTAuth{
+							Realm:    "My Test API",
+							JwksURI:  "https://idp.example.com:443/keys",
+							KeyCache: "1h",
+						},
+					},
+				},
+			},
+			expected: policiesCfg{
+				JWTAuth: &version2.JWTAuth{
+					Realm: "My Test API",
+					JwksURI: version2.JwksURI{
+						JwksScheme: "https",
+						JwksHost:   "idp.example.com",
+						JwksPort:   "443",
+						JwksPath:   "/keys",
+					},
+					KeyCache: "1h",
+				},
+			},
+			msg: "Basic jwks example",
+		},
+		{
+			policyRefs: []conf_v1.PolicyReference{
+				{
+					Name:      "jwt-policy-2",
+					Namespace: "default",
+				},
+			},
+			policies: map[string]*conf_v1.Policy{
+				"default/jwt-policy-2": {
+					ObjectMeta: meta_v1.ObjectMeta{
+						Name:      "jwt-policy",
+						Namespace: "default",
+					},
+					Spec: conf_v1.PolicySpec{
+						JWTAuth: &conf_v1.JWTAuth{
+							Realm:    "My Test API",
+							JwksURI:  "https://idp.example.com/keys",
+							KeyCache: "1h",
+						},
+					},
+				},
+			},
+			expected: policiesCfg{
+				JWTAuth: &version2.JWTAuth{
+					Realm: "My Test API",
+					JwksURI: version2.JwksURI{
+						JwksScheme: "https",
+						JwksHost:   "idp.example.com",
+						JwksPort:   "",
+						JwksPath:   "/keys",
+					},
+					KeyCache: "1h",
+				},
+			},
+			msg: "Basic jwks example, no port in JwksURI",
+		},
+		{
+			policyRefs: []conf_v1.PolicyReference{
+				{
 					Name:      "basic-auth-policy",
 					Namespace: "default",
 				},
@@ -3126,6 +3198,55 @@ func TestGeneratePolicies(t *testing.T) {
 		if len(vsc.warnings) > 0 {
 			t.Errorf("generatePolicies() returned unexpected warnings %v for the case of %s", vsc.warnings, test.msg)
 		}
+	}
+}
+
+func TestGeneratePolicies_GeneratesWAFPolicyOnValidApBundle(t *testing.T) {
+	t.Parallel()
+
+	ownerDetails := policyOwnerDetails{
+		owner:          nil, // nil is OK for the unit test
+		ownerNamespace: "default",
+		vsNamespace:    "default",
+		vsName:         "test",
+	}
+
+	test := struct {
+		policyRefs []conf_v1.PolicyReference
+		policies   map[string]*conf_v1.Policy
+		policyOpts policyOptions
+		context    string
+		want       policiesCfg
+	}{
+		policyRefs: []conf_v1.PolicyReference{
+			{
+				Name:      "waf-bundle",
+				Namespace: "default",
+			},
+		},
+		policies: map[string]*conf_v1.Policy{
+			"default/waf-bundle": {
+				Spec: conf_v1.PolicySpec{
+					WAF: &conf_v1.WAF{
+						Enable:   true,
+						ApBundle: "testWAFPolicyBundle.tgz",
+					},
+				},
+			},
+		},
+		context: "route",
+	}
+
+	vsc := newVirtualServerConfigurator(&ConfigParams{}, false, false, &StaticConfigParams{}, false)
+	want := policiesCfg{
+		WAF: &version2.WAF{
+			Enable:   "on",
+			ApBundle: "/etc/nginx/waf/bundles/testWAFPolicyBundle.tgz",
+		},
+	}
+	got := vsc.generatePolicies(ownerDetails, test.policyRefs, test.policies, test.context, policyOptions{})
+	if !cmp.Equal(want, got) {
+		t.Error(cmp.Diff(want, got))
 	}
 }
 
@@ -5675,7 +5796,7 @@ func TestGenerateSplits(t *testing.T) {
 			Namespace: "default",
 		},
 	}
-	upstreamNamer := newUpstreamNamerForVirtualServer(&virtualServer)
+	upstreamNamer := NewUpstreamNamerForVirtualServer(&virtualServer)
 	variableNamer := newVariableNamer(&virtualServer)
 	scIndex := 1
 	cfgParams := ConfigParams{}
@@ -5886,7 +6007,7 @@ func TestGenerateDefaultSplitsConfig(t *testing.T) {
 			Namespace: "default",
 		},
 	}
-	upstreamNamer := newUpstreamNamerForVirtualServer(&virtualServer)
+	upstreamNamer := NewUpstreamNamerForVirtualServer(&virtualServer)
 	variableNamer := newVariableNamer(&virtualServer)
 	index := 1
 
@@ -6072,7 +6193,7 @@ func TestGenerateMatchesConfig(t *testing.T) {
 			},
 		},
 	}
-	upstreamNamer := newUpstreamNamerForVirtualServer(&virtualServer)
+	upstreamNamer := NewUpstreamNamerForVirtualServer(&virtualServer)
 	variableNamer := newVariableNamer(&virtualServer)
 	index := 1
 	scIndex := 2
@@ -6454,7 +6575,7 @@ func TestGenerateMatchesConfigWithMultipleSplits(t *testing.T) {
 			Namespace: "default",
 		},
 	}
-	upstreamNamer := newUpstreamNamerForVirtualServer(&virtualServer)
+	upstreamNamer := NewUpstreamNamerForVirtualServer(&virtualServer)
 	variableNamer := newVariableNamer(&virtualServer)
 	index := 1
 	scIndex := 2
@@ -7028,6 +7149,7 @@ func TestNewHealthCheckWithDefaults(t *testing.T) {
 		URI:                 "/",
 		Interval:            "5s",
 		Jitter:              "0s",
+		KeepaliveTime:       "60s",
 		Fails:               1,
 		Passes:              1,
 		Headers:             make(map[string]string),
@@ -7056,6 +7178,7 @@ func TestGenerateHealthCheck(t *testing.T) {
 					Path:           "/healthz",
 					Interval:       "5s",
 					Jitter:         "2s",
+					KeepaliveTime:  "120s",
 					Fails:          3,
 					Passes:         2,
 					Port:           8080,
@@ -7085,6 +7208,7 @@ func TestGenerateHealthCheck(t *testing.T) {
 				URI:                 "/healthz",
 				Interval:            "5s",
 				Jitter:              "2s",
+				KeepaliveTime:       "120s",
 				Fails:               3,
 				Passes:              2,
 				Port:                8080,
@@ -7115,6 +7239,7 @@ func TestGenerateHealthCheck(t *testing.T) {
 				URI:                 "/",
 				Interval:            "5s",
 				Jitter:              "0s",
+				KeepaliveTime:       "60s",
 				Fails:               1,
 				Passes:              1,
 				Headers:             make(map[string]string),
@@ -7137,6 +7262,7 @@ func TestGenerateHealthCheck(t *testing.T) {
 				URI:                 "/",
 				Interval:            "5s",
 				Jitter:              "0s",
+				KeepaliveTime:       "60s",
 				Fails:               1,
 				Passes:              1,
 				Headers:             make(map[string]string),
@@ -7155,6 +7281,7 @@ func TestGenerateHealthCheck(t *testing.T) {
 					Enable:         true,
 					Interval:       "1m 5s",
 					Jitter:         "2m 3s",
+					KeepaliveTime:  "1m 6s",
 					ConnectTimeout: "1m 10s",
 					SendTimeout:    "1m 20s",
 					ReadTimeout:    "1m 30s",
@@ -7170,6 +7297,7 @@ func TestGenerateHealthCheck(t *testing.T) {
 				URI:                 "/",
 				Interval:            "1m5s",
 				Jitter:              "2m3s",
+				KeepaliveTime:       "1m6s",
 				Fails:               1,
 				Passes:              1,
 				Headers:             make(map[string]string),
@@ -7197,6 +7325,7 @@ func TestGenerateHealthCheck(t *testing.T) {
 				URI:                 "/",
 				Interval:            "5s",
 				Jitter:              "0s",
+				KeepaliveTime:       "60s",
 				Fails:               1,
 				Passes:              1,
 				Headers:             make(map[string]string),
@@ -7236,6 +7365,7 @@ func TestGenerateGrpcHealthCheck(t *testing.T) {
 					Enable:         true,
 					Interval:       "5s",
 					Jitter:         "2s",
+					KeepaliveTime:  "120s",
 					Fails:          3,
 					Passes:         2,
 					Port:           50051,
@@ -7267,6 +7397,7 @@ func TestGenerateGrpcHealthCheck(t *testing.T) {
 				GRPCPass:            fmt.Sprintf("grpc://%v", upstreamName),
 				Interval:            "5s",
 				Jitter:              "2s",
+				KeepaliveTime:       "120s",
 				Fails:               3,
 				Passes:              2,
 				Port:                50051,
@@ -7299,6 +7430,7 @@ func TestGenerateGrpcHealthCheck(t *testing.T) {
 				GRPCPass:            fmt.Sprintf("grpc://%v", upstreamName),
 				Interval:            "5s",
 				Jitter:              "0s",
+				KeepaliveTime:       "60s",
 				Fails:               1,
 				Passes:              1,
 				Headers:             make(map[string]string),

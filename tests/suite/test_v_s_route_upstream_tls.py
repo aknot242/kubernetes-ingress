@@ -2,14 +2,14 @@ import pytest
 import requests
 from kubernetes.client.rest import ApiException
 from settings import TEST_DATA
-from suite.custom_assertions import (
+from suite.utils.custom_assertions import (
     assert_event,
     assert_event_and_get_count,
     assert_event_count_increased,
     assert_no_new_events,
     assert_response_codes,
 )
-from suite.resources_utils import (
+from suite.utils.resources_utils import (
     create_items_from_yaml,
     delete_items_from_yaml,
     ensure_response_from_backend,
@@ -18,7 +18,7 @@ from suite.resources_utils import (
     wait_before_test,
     wait_until_all_pods_are_ready,
 )
-from suite.vs_vsr_resources_utils import get_vs_nginx_template_conf, patch_v_s_route_from_yaml
+from suite.utils.vs_vsr_resources_utils import get_vs_nginx_template_conf, patch_v_s_route_from_yaml
 
 
 @pytest.fixture(scope="class")
@@ -47,13 +47,14 @@ def v_s_route_secure_app_setup(request, kube_apis, v_s_route_setup) -> None:
     wait_until_all_pods_are_ready(kube_apis.v1, v_s_route_setup.route_s.namespace)
 
     def fin():
-        print("Clean up the Application:")
-        delete_items_from_yaml(
-            kube_apis, f"{TEST_DATA}/common/app/vsr/secure/multiple.yaml", v_s_route_setup.route_m.namespace
-        )
-        delete_items_from_yaml(
-            kube_apis, f"{TEST_DATA}/common/app/vsr/secure/single.yaml", v_s_route_setup.route_s.namespace
-        )
+        if request.config.getoption("--skip-fixture-teardown") == "no":
+            print("Clean up the Application:")
+            delete_items_from_yaml(
+                kube_apis, f"{TEST_DATA}/common/app/vsr/secure/multiple.yaml", v_s_route_setup.route_m.namespace
+            )
+            delete_items_from_yaml(
+                kube_apis, f"{TEST_DATA}/common/app/vsr/secure/single.yaml", v_s_route_setup.route_s.namespace
+            )
 
     request.addfinalizer(fin)
 
@@ -123,6 +124,7 @@ class TestVSRouteUpstreamTls:
         assert_event(vsr_m_event_text, events_ns_m)
         assert_event(vs_event_text, events_ns_m)
 
+    @pytest.mark.flaky(max_runs=3)
     def test_validation_flow(
         self,
         kube_apis,

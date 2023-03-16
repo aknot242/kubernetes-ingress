@@ -1,8 +1,8 @@
 import pytest
 import requests
 from settings import TEST_DATA
-from suite.fixtures import PublicEndpoint
-from suite.resources_utils import (
+from suite.fixtures.fixtures import PublicEndpoint
+from suite.utils.resources_utils import (
     create_example_app,
     create_items_from_yaml,
     delete_common_app,
@@ -14,7 +14,7 @@ from suite.resources_utils import (
     wait_before_test,
     wait_until_all_pods_are_ready,
 )
-from suite.yaml_utils import get_first_ingress_host_from_yaml, get_name_from_yaml
+from suite.utils.yaml_utils import get_first_ingress_host_from_yaml, get_name_from_yaml
 
 
 class HSTSSetup:
@@ -61,9 +61,10 @@ def hsts_setup(
     ensure_response_from_backend(req_https_url, ingress_host)
 
     def fin():
-        print("Clean up HSTS Example:")
-        delete_common_app(kube_apis, "simple", test_namespace)
-        delete_items_from_yaml(kube_apis, f"{TEST_DATA}/hsts/{request.param}/hsts-ingress.yaml", test_namespace)
+        if request.config.getoption("--skip-fixture-teardown") == "no":
+            print("Clean up HSTS Example:")
+            delete_common_app(kube_apis, "simple", test_namespace)
+            delete_items_from_yaml(kube_apis, f"{TEST_DATA}/hsts/{request.param}/hsts-ingress.yaml", test_namespace)
 
     request.addfinalizer(fin)
 

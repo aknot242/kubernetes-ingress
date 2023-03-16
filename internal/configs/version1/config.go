@@ -15,7 +15,6 @@ type IngressNginxConfig struct {
 	Keepalive         string
 	Ingress           Ingress
 	SpiffeClientCerts bool
-	DisableIPV6       bool
 }
 
 // Ingress holds information about an Ingress resource.
@@ -193,6 +192,8 @@ type MainConfig struct {
 	SetRealIPFrom                      []string
 	ServerNamesHashBucketSize          string
 	ServerNamesHashMaxSize             string
+	MapHashBucketSize                  string
+	MapHashMaxSize                     string
 	ServerTokens                       string
 	SSLRejectHandshake                 bool
 	SSLCiphers                         string

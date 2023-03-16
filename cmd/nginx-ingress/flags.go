@@ -11,19 +11,11 @@ import (
 
 	"github.com/golang/glog"
 	api_v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 var (
-
-	// Injected during build
-	version string
-
-	// Info read from the binary
-	commitHash = "unknown"
-	commitTime = "unknown"
-	dirtyBuild = true
-
 	healthStatus = flag.Bool("health-status", false,
 		`Add a location based on the value of health-status-uri to the default server. The location responds with the 200 status code for any request.
 	Useful for external health-checking of the Ingress Controller`)
@@ -36,9 +28,17 @@ var (
 	The Ingress Controller does not start NGINX and does not write any generated NGINX configuration files to disk`)
 
 	watchNamespace = flag.String("watch-namespace", api_v1.NamespaceAll,
-		`Comma separated list of namespaces the Ingress Controller should watch for resources. By default the Ingress Controller watches all namespaces`)
+		`Comma separated list of namespaces the Ingress Controller should watch for resources. By default the Ingress Controller watches all namespaces. Mutually exclusive with "watch-namespace-label".`)
 
 	watchNamespaces []string
+
+	watchSecretNamespace = flag.String("watch-secret-namespace", "",
+		`Comma separated list of namespaces the Ingress Controller should watch for secrets. If this arg is not configured, the Ingress Controller watches the same namespaces for all resources. See "watch-namespace" and "watch-namespace-label". `)
+
+	watchSecretNamespaces []string
+
+	watchNamespaceLabel = flag.String("watch-namespace-label", "",
+		`Configures the Ingress Controller to watch only those namespaces with label foo=bar. By default the Ingress Controller watches all namespaces. Mutually exclusive with "watch-namespace". `)
 
 	nginxConfigMaps = flag.String("nginx-configmaps", "",
 		`A ConfigMap resource for customizing NGINX configuration. If a ConfigMap is set,
@@ -139,6 +139,15 @@ var (
 	prometheusMetricsListenPort = flag.Int("prometheus-metrics-listen-port", 9113,
 		"Set the port where the Prometheus metrics are exposed. [1024 - 65535]")
 
+	enableServiceInsight = flag.Bool("enable-service-insight", false,
+		`Enable service insight for external load balancers. Requires -nginx-plus`)
+
+	serviceInsightTLSSecretName = flag.String("service-insight-tls-secret", "",
+		`A Secret with a TLS certificate and key for TLS termination of the service insight.`)
+
+	serviceInsightListenPort = flag.Int("service-insight-listen-port", 9114,
+		"Set the port where the Service Insight stats are exposed. Requires -nginx-plus. [1024 - 65535]")
+
 	enableCustomResources = flag.Bool("enable-custom-resources", true,
 		"Enable custom resources")
 
@@ -187,19 +196,16 @@ var (
 )
 
 //gocyclo:ignore
-func parseFlags(versionInfo string, binaryInfo string) {
+func parseFlags() {
 	flag.Parse()
+
+	if *versionFlag {
+		os.Exit(0)
+	}
 
 	initialChecks()
 
-	if *versionFlag {
-		printVersionInfo(versionInfo, binaryInfo)
-	}
-
-	glog.Infof("Starting NGINX Ingress Controller %v PlusFlag=%v", versionInfo, *nginxPlus)
-	glog.Info(binaryInfo)
-
-	watchNamespaces = strings.Split(*watchNamespace, ",")
+	validateWatchedNamespaces()
 
 	validationChecks()
 
@@ -240,10 +246,6 @@ func parseFlags(versionInfo string, binaryInfo string) {
 		glog.Fatal("NGINX App Protect Dos memory support is for NGINX Plus and App Protect Dos is enable")
 	}
 
-	if *spireAgentAddress != "" && !*nginxPlus {
-		glog.Fatal("spire-agent-address support is for NGINX Plus only")
-	}
-
 	if *enableInternalRoutes && *spireAgentAddress == "" {
 		glog.Fatal("enable-internal-routes flag requires spire-agent-address")
 	}
@@ -251,6 +253,11 @@ func parseFlags(versionInfo string, binaryInfo string) {
 	if *enableLatencyMetrics && !*enablePrometheusMetrics {
 		glog.Warning("enable-latency-metrics flag requires enable-prometheus-metrics, latency metrics will not be collected")
 		*enableLatencyMetrics = false
+	}
+
+	if *enableServiceInsight && !*nginxPlus {
+		glog.Warning("enable-service-insight flag support is for NGINX Plus, service insight endpoint will not be exposed")
+		*enableServiceInsight = false
 	}
 
 	if *enableCertManager && !*enableCustomResources {
@@ -284,17 +291,48 @@ func initialChecks() {
 		}
 	}
 
+	glog.Infof("Starting with flags: %+q", os.Args[1:])
+
 	unparsed := flag.Args()
 	if len(unparsed) > 0 {
 		glog.Warningf("Ignoring unhandled arguments: %+q", unparsed)
 	}
 }
 
-// printVersionInfo prints the the version and binary info before exiting if the flag is set
-func printVersionInfo(versionInfo string, binaryInfo string) {
-	fmt.Println(versionInfo)
-	fmt.Println(binaryInfo)
-	os.Exit(0)
+func validateWatchedNamespaces() {
+	if *watchNamespace != "" && *watchNamespaceLabel != "" {
+		glog.Fatal("watch-namespace and -watch-namespace-label are mutually exclusive")
+	}
+
+	watchNamespaces = strings.Split(*watchNamespace, ",")
+
+	if *watchNamespace != "" {
+		glog.Infof("Namespaces watched: %v", watchNamespaces)
+		namespacesNameValidationError := validateNamespaceNames(watchNamespaces)
+		if namespacesNameValidationError != nil {
+			glog.Fatalf("Invalid values for namespaces: %v", namespacesNameValidationError)
+		}
+	}
+
+	if len(*watchSecretNamespace) > 0 {
+		watchSecretNamespaces = strings.Split(*watchSecretNamespace, ",")
+		glog.Infof("Namespaces watched for secrets: %v", watchSecretNamespaces)
+		namespacesNameValidationError := validateNamespaceNames(watchSecretNamespaces)
+		if namespacesNameValidationError != nil {
+			glog.Fatalf("Invalid values for secret namespaces: %v", namespacesNameValidationError)
+		}
+	} else {
+		// empty => default to watched namespaces
+		watchSecretNamespaces = watchNamespaces
+	}
+
+	if *watchNamespaceLabel != "" {
+		var err error
+		_, err = labels.Parse(*watchNamespaceLabel)
+		if err != nil {
+			glog.Fatalf("Unable to parse label %v for watch namespace label: %v", *watchNamespaceLabel, err)
+		}
+	}
 }
 
 // validationChecks checks the values for various flags
@@ -307,11 +345,6 @@ func validationChecks() {
 	statusLockNameValidationError := validateResourceName(*leaderElectionLockName)
 	if statusLockNameValidationError != nil {
 		glog.Fatalf("Invalid value for leader-election-lock-name: %v", statusLockNameValidationError)
-	}
-
-	namespacesNameValidationError := validateNamespaceNames(watchNamespaces)
-	if namespacesNameValidationError != nil {
-		glog.Fatalf("Invalid values for namespaces: %v", namespacesNameValidationError)
 	}
 
 	statusPortValidationError := validatePort(*nginxStatusPort)
@@ -327,6 +360,11 @@ func validationChecks() {
 	readyStatusPortValidationError := validatePort(*readyStatusPort)
 	if readyStatusPortValidationError != nil {
 		glog.Fatalf("Invalid value for ready-status-port: %v", readyStatusPortValidationError)
+	}
+
+	healthProbePortValidationError := validatePort(*serviceInsightListenPort)
+	if healthProbePortValidationError != nil {
+		glog.Fatalf("Invalid value for service-insight-listen-port: %v", metricsPortValidationError)
 	}
 
 	var err error

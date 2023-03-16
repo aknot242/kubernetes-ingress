@@ -141,6 +141,7 @@ type HealthCheck struct {
 	GRPCService    string       `json:"grpcService"`
 	Mandatory      bool         `json:"mandatory"`
 	Persistent     bool         `json:"persistent"`
+	KeepaliveTime  string       `json:"keepalive-time"`
 }
 
 // Header defines an HTTP Header.
@@ -438,9 +439,11 @@ type RateLimit struct {
 
 // JWTAuth holds JWT authentication configuration.
 type JWTAuth struct {
-	Realm  string `json:"realm"`
-	Secret string `json:"secret"`
-	Token  string `json:"token"`
+	Realm    string `json:"realm"`
+	Secret   string `json:"secret"`
+	Token    string `json:"token"`
+	JwksURI  string `json:"jwksURI"`
+	KeyCache string `json:"keyCache"`
 }
 
 // BasicAuth holds HTTP Basic authentication configuration
@@ -472,20 +475,22 @@ type EgressMTLS struct {
 
 // OIDC defines an Open ID Connect policy.
 type OIDC struct {
-	AuthEndpoint   string `json:"authEndpoint"`
-	TokenEndpoint  string `json:"tokenEndpoint"`
-	JWKSURI        string `json:"jwksURI"`
-	ClientID       string `json:"clientID"`
-	ClientSecret   string `json:"clientSecret"`
-	Scope          string `json:"scope"`
-	RedirectURI    string `json:"redirectURI"`
-	ZoneSyncLeeway *int   `json:"zoneSyncLeeway"`
+	AuthEndpoint   string   `json:"authEndpoint"`
+	TokenEndpoint  string   `json:"tokenEndpoint"`
+	JWKSURI        string   `json:"jwksURI"`
+	ClientID       string   `json:"clientID"`
+	ClientSecret   string   `json:"clientSecret"`
+	Scope          string   `json:"scope"`
+	RedirectURI    string   `json:"redirectURI"`
+	ZoneSyncLeeway *int     `json:"zoneSyncLeeway"`
+	AuthExtraArgs  []string `json:"authExtraArgs"`
 }
 
 // WAF defines an WAF policy.
 type WAF struct {
 	Enable       bool           `json:"enable"`
 	ApPolicy     string         `json:"apPolicy"`
+	ApBundle     string         `json:"apBundle"`
 	SecurityLog  *SecurityLog   `json:"securityLog"`
 	SecurityLogs []*SecurityLog `json:"securityLogs"`
 }

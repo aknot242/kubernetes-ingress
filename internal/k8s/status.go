@@ -35,14 +35,10 @@ type statusUpdater struct {
 	bigIPAddress             string
 	bigIPPorts               string
 	externalEndpoints        []conf_v1.ExternalEndpoint
-	status                   []api_v1.LoadBalancerIngress
+	status                   []networking.IngressLoadBalancerIngress
 	statusInitialized        bool
 	keyFunc                  func(obj interface{}) (string, error)
-	ingressLister            []storeToIngressLister
-	virtualServerLister      []cache.Store
-	virtualServerRouteLister []cache.Store
-	transportServerLister    []cache.Store
-	policyLister             []cache.Store
+	namespacedInformers      map[string]*namespacedInformer
 	confClient               k8s_nginx.Interface
 	hasCorrectIngressClass   func(interface{}) bool
 }
@@ -100,7 +96,7 @@ func (su *statusUpdater) UpdateExternalEndpointsForResource(r Resource) error {
 
 // ClearIngressStatus clears the Ingress status.
 func (su *statusUpdater) ClearIngressStatus(ing networking.Ingress) error {
-	return su.updateIngressWithStatus(ing, []api_v1.LoadBalancerIngress{})
+	return su.updateIngressWithStatus(ing, []networking.IngressLoadBalancerIngress{})
 }
 
 // UpdateIngressStatus updates the status on the selected Ingress.
@@ -111,8 +107,26 @@ func (su *statusUpdater) UpdateIngressStatus(ing networking.Ingress) error {
 	return su.updateIngressWithStatus(ing, su.status)
 }
 
+func (su *statusUpdater) getNamespacedInformer(ns string) *namespacedInformer {
+	var nsi *namespacedInformer
+	var isGlobalNs bool
+	var exists bool
+
+	nsi, isGlobalNs = su.namespacedInformers[""]
+
+	if !isGlobalNs {
+		// get the correct namespaced informers
+		nsi, exists = su.namespacedInformers[ns]
+		if !exists {
+			// we are not watching this namespace
+			return nil
+		}
+	}
+	return nsi
+}
+
 // updateIngressWithStatus sets the provided status on the selected Ingress.
-func (su *statusUpdater) updateIngressWithStatus(ing networking.Ingress, status []api_v1.LoadBalancerIngress) error {
+func (su *statusUpdater) updateIngressWithStatus(ing networking.Ingress, status []networking.IngressLoadBalancerIngress) error {
 	// Get an up-to-date Ingress from the Store
 	key, err := su.keyFunc(&ing)
 	if err != nil {
@@ -120,14 +134,11 @@ func (su *statusUpdater) updateIngressWithStatus(ing networking.Ingress, status 
 		return err
 	}
 
+	ns, _, _ := cache.SplitMetaNamespaceKey(key)
 	var ingCopy *networking.Ingress
 	var exists bool
-	for _, il := range su.ingressLister {
-		ingCopy, exists, err = il.GetByKeySafe(key)
-		if exists {
-			break
-		}
-	}
+	ingCopy, exists, err = su.getNamespacedInformer(ns).ingressLister.GetByKeySafe(key)
+
 	if err != nil {
 		glog.V(3).Infof("error getting ing from Store by key: %v", err)
 		return err
@@ -201,12 +212,12 @@ func (su *statusUpdater) retryStatusUpdate(clientIngress typednetworking.Ingress
 // saveStatus saves the string array of IPs or addresses that we will set as status
 // on all the Ingresses that we manage.
 func (su *statusUpdater) saveStatus(ips []string) {
-	statusIngs := []api_v1.LoadBalancerIngress{}
+	statusIngs := []networking.IngressLoadBalancerIngress{}
 	for _, ip := range ips {
 		if net.ParseIP(ip) == nil {
-			statusIngs = append(statusIngs, api_v1.LoadBalancerIngress{Hostname: ip})
+			statusIngs = append(statusIngs, networking.IngressLoadBalancerIngress{Hostname: ip})
 		} else {
-			statusIngs = append(statusIngs, api_v1.LoadBalancerIngress{IP: ip})
+			statusIngs = append(statusIngs, networking.IngressLoadBalancerIngress{IP: ip})
 		}
 	}
 	su.status = statusIngs
@@ -415,12 +426,9 @@ func (su *statusUpdater) UpdateTransportServerStatus(ts *conf_v1alpha1.Transport
 	var tsLatest interface{}
 	var exists bool
 	var err error
-	for _, tl := range su.transportServerLister {
-		tsLatest, exists, err = tl.Get(ts)
-		if exists {
-			break
-		}
-	}
+
+	tsLatest, exists, err = su.getNamespacedInformer(ts.Namespace).transportServerLister.Get(ts)
+
 	if err != nil {
 		glog.V(3).Infof("error getting TransportServer from Store: %v", err)
 		return err
@@ -466,12 +474,9 @@ func (su *statusUpdater) UpdateVirtualServerStatus(vs *conf_v1.VirtualServer, st
 	var vsLatest interface{}
 	var exists bool
 	var err error
-	for _, vl := range su.virtualServerLister {
-		vsLatest, exists, err = vl.Get(vs)
-		if exists {
-			break
-		}
-	}
+
+	vsLatest, exists, err = su.getNamespacedInformer(vs.Namespace).virtualServerLister.Get(vs)
+
 	if err != nil {
 		glog.V(3).Infof("error getting VirtualServer from Store: %v", err)
 		return err
@@ -532,12 +537,9 @@ func (su *statusUpdater) UpdateVirtualServerRouteStatusWithReferencedBy(vsr *con
 	var vsrLatest interface{}
 	var exists bool
 	var err error
-	for _, vl := range su.virtualServerRouteLister {
-		vsrLatest, exists, err = vl.Get(vsr)
-		if exists {
-			break
-		}
-	}
+
+	vsrLatest, exists, err = su.getNamespacedInformer(vsr.Namespace).virtualServerRouteLister.Get(vsr)
+
 	if err != nil {
 		glog.V(3).Infof("error getting VirtualServerRoute from Store: %v", err)
 		return err
@@ -575,12 +577,9 @@ func (su *statusUpdater) UpdateVirtualServerRouteStatus(vsr *conf_v1.VirtualServ
 	var vsrLatest interface{}
 	var exists bool
 	var err error
-	for _, vl := range su.virtualServerRouteLister {
-		vsrLatest, exists, err = vl.Get(vsr)
-		if exists {
-			break
-		}
-	}
+
+	vsrLatest, exists, err = su.getNamespacedInformer(vsr.Namespace).virtualServerRouteLister.Get(vsr)
+
 	if err != nil {
 		glog.V(3).Infof("error getting VirtualServerRoute from Store: %v", err)
 		return err
@@ -614,12 +613,9 @@ func (su *statusUpdater) updateVirtualServerExternalEndpoints(vs *conf_v1.Virtua
 	var vsLatest interface{}
 	var exists bool
 	var err error
-	for _, vl := range su.virtualServerLister {
-		vsLatest, exists, err = vl.Get(vs)
-		if exists {
-			break
-		}
-	}
+
+	vsLatest, exists, err = su.getNamespacedInformer(vs.Namespace).virtualServerLister.Get(vs)
+
 	if err != nil {
 		glog.V(3).Infof("error getting VirtualServer from Store: %v", err)
 		return err
@@ -645,12 +641,9 @@ func (su *statusUpdater) updateVirtualServerRouteExternalEndpoints(vsr *conf_v1.
 	var vsrLatest interface{}
 	var exists bool
 	var err error
-	for _, vl := range su.virtualServerRouteLister {
-		vsrLatest, exists, err = vl.Get(vsr)
-		if exists {
-			break
-		}
-	}
+
+	vsrLatest, exists, err = su.getNamespacedInformer(vsr.Namespace).virtualServerRouteLister.Get(vsr)
+
 	if err != nil {
 		glog.V(3).Infof("error getting VirtualServerRoute from Store: %v", err)
 		return err
@@ -671,7 +664,7 @@ func (su *statusUpdater) updateVirtualServerRouteExternalEndpoints(vsr *conf_v1.
 	return err
 }
 
-func (su *statusUpdater) generateExternalEndpointsFromStatus(status []api_v1.LoadBalancerIngress) []conf_v1.ExternalEndpoint {
+func (su *statusUpdater) generateExternalEndpointsFromStatus(status []networking.IngressLoadBalancerIngress) []conf_v1.ExternalEndpoint {
 	var externalEndpoints []conf_v1.ExternalEndpoint
 	for _, lb := range status {
 		ports := su.externalServicePorts
@@ -696,12 +689,9 @@ func (su *statusUpdater) UpdatePolicyStatus(pol *conf_v1.Policy, state string, r
 	var polLatest interface{}
 	var exists bool
 	var err error
-	for _, vl := range su.policyLister {
-		polLatest, exists, err = vl.Get(pol)
-		if exists {
-			break
-		}
-	}
+
+	polLatest, exists, err = su.getNamespacedInformer(pol.Namespace).policyLister.Get(pol)
+
 	if err != nil {
 		glog.V(3).Infof("error getting policy from Store: %v", err)
 		return err

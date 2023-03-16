@@ -1,7 +1,7 @@
 import pytest
 from _ssl import SSLError
 from settings import TEST_DATA
-from suite.resources_utils import (
+from suite.utils.resources_utils import (
     create_ingress_from_yaml,
     create_secret_from_yaml,
     delete_items_from_yaml,
@@ -11,8 +11,8 @@ from suite.resources_utils import (
     replace_secret,
     wait_before_test,
 )
-from suite.ssl_utils import get_server_certificate_subject
-from suite.yaml_utils import get_first_ingress_host_from_yaml, get_name_from_yaml
+from suite.utils.ssl_utils import get_server_certificate_subject
+from suite.utils.yaml_utils import get_first_ingress_host_from_yaml, get_name_from_yaml
 
 
 def assert_unrecognized_name_error(endpoint, host):
@@ -76,10 +76,11 @@ def tls_setup(
     )
 
     def fin():
-        print("Clean up TLS setup")
-        delete_items_from_yaml(kube_apis, ingress_path, test_namespace)
-        if is_secret_present(kube_apis.v1, secret_name, test_namespace):
-            delete_secret(kube_apis.v1, secret_name, test_namespace)
+        if request.config.getoption("--skip-fixture-teardown") == "no":
+            print("Clean up TLS setup")
+            delete_items_from_yaml(kube_apis, ingress_path, test_namespace)
+            if is_secret_present(kube_apis.v1, secret_name, test_namespace):
+                delete_secret(kube_apis.v1, secret_name, test_namespace)
 
     request.addfinalizer(fin)
 

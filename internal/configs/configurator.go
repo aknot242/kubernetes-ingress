@@ -32,6 +32,7 @@ import (
 
 const (
 	pemFileNameForWildcardTLSSecret = "/etc/nginx/secrets/wildcard" // #nosec G101
+	appProtectBundleFolder          = "/etc/nginx/waf/bundles/"
 	appProtectPolicyFolder          = "/etc/nginx/waf/nac-policies/"
 	appProtectLogConfFolder         = "/etc/nginx/waf/nac-logconfs/"
 	appProtectUserSigFolder         = "/etc/nginx/waf/nac-usersigs/"
@@ -42,6 +43,9 @@ const (
 
 // DefaultServerSecretPath is the full path to the Secret with a TLS cert and a key for the default server. #nosec G101
 const DefaultServerSecretPath = "/etc/nginx/secrets/default"
+
+// DefaultSecretPath is the full default path to where secrets are stored and accessed.
+const DefaultSecretPath = "/etc/nginx/secrets" // #nosec G101
 
 // DefaultServerSecretName is the filename of the Secret with a TLS cert and a key for the default server.
 const DefaultServerSecretName = "default"
@@ -111,6 +115,7 @@ type Configurator struct {
 	ingresses               map[string]*IngressEx
 	minions                 map[string]map[string]bool
 	virtualServers          map[string]*VirtualServerEx
+	transportServers        map[string]*TransportServerEx
 	tlsPassthroughPairs     map[string]tlsPassthroughPair
 	isWildcardEnabled       bool
 	isPlus                  bool
@@ -145,6 +150,7 @@ func NewConfigurator(nginxManager nginx.Manager, staticCfgParams *StaticConfigPa
 		cfgParams:               config,
 		ingresses:               make(map[string]*IngressEx),
 		virtualServers:          make(map[string]*VirtualServerEx),
+		transportServers:        make(map[string]*TransportServerEx),
 		templateExecutor:        templateExecutor,
 		templateExecutorV2:      templateExecutorV2,
 		minions:                 make(map[string]map[string]bool),
@@ -263,6 +269,77 @@ func (cnf *Configurator) AddOrUpdateIngress(ingEx *IngressEx) (Warnings, error) 
 	}
 
 	return warnings, nil
+}
+
+// virtualServerForHost takes a hostname and returns a VS for the given hostname.
+func (cnf *Configurator) virtualServerForHost(hostname string) *conf_v1.VirtualServer {
+	for _, vsEx := range cnf.virtualServers {
+		if vsEx.VirtualServer.Spec.Host == hostname {
+			return vsEx.VirtualServer
+		}
+	}
+	return nil
+}
+
+// upstreamsForVirtualServer takes VirtualServer and returns a list of associated upstreams.
+func (cnf *Configurator) upstreamsForVirtualServer(vs *conf_v1.VirtualServer) []string {
+	glog.V(3).Infof("Get upstreamName for vs: %s", vs.Spec.Host)
+	upstreamNames := make([]string, 0, len(vs.Spec.Upstreams))
+
+	virtualServerUpstreamNamer := NewUpstreamNamerForVirtualServer(vs)
+
+	for _, u := range vs.Spec.Upstreams {
+		upstreamName := virtualServerUpstreamNamer.GetNameForUpstream(u.Name)
+		glog.V(3).Infof("upstream: %s, upstreamName: %s", u.Name, upstreamName)
+		upstreamNames = append(upstreamNames, upstreamName)
+	}
+	return upstreamNames
+}
+
+// UpstreamsForHost takes a hostname and returns upstreams for the given hostname.
+func (cnf *Configurator) UpstreamsForHost(hostname string) []string {
+	glog.V(3).Infof("Get upstream for host: %s", hostname)
+	vs := cnf.virtualServerForHost(hostname)
+	if vs != nil {
+		return cnf.upstreamsForVirtualServer(vs)
+	}
+	return nil
+}
+
+// StreamUpstreamsForName takes a name and returns stream upstreams
+// associated with this name. The name represents TS's
+// (TransportServer) action name.
+func (cnf *Configurator) StreamUpstreamsForName(name string) []string {
+	glog.V(3).Infof("Get stream upstreams for name: '%s'", name)
+	ts := cnf.transportServerForActionName(name)
+	if ts != nil {
+		return cnf.streamUpstreamsForTransportServer(ts)
+	}
+	return nil
+}
+
+// transportServerForActionName takes an action name and returns
+// Transport Server obj associated with that name.
+func (cnf *Configurator) transportServerForActionName(name string) *conf_v1alpha1.TransportServer {
+	for _, tsEx := range cnf.transportServers {
+		glog.V(3).Infof("Check ts action '%s' for requested name: '%s'", tsEx.TransportServer.Spec.Action.Pass, name)
+		if tsEx.TransportServer.Spec.Action.Pass == name {
+			return tsEx.TransportServer
+		}
+	}
+	return nil
+}
+
+// streamUpstreamsForTransportServer takes TransportServer obj and returns
+// a list of stream upstreams associated with this TransportServer.
+func (cnf *Configurator) streamUpstreamsForTransportServer(ts *conf_v1alpha1.TransportServer) []string {
+	upstreamNames := make([]string, 0, len(ts.Spec.Upstreams))
+	n := newUpstreamNamerForTransportServer(ts)
+	for _, u := range ts.Spec.Upstreams {
+		un := n.GetNameForUpstream(u.Name)
+		upstreamNames = append(upstreamNames, un)
+	}
+	return upstreamNames
 }
 
 func (cnf *Configurator) addOrUpdateIngress(ingEx *IngressEx) (Warnings, error) {
@@ -452,8 +529,7 @@ func (cnf *Configurator) AddOrUpdateVirtualServer(virtualServerEx *VirtualServer
 }
 
 func (cnf *Configurator) addOrUpdateOpenTracingTracerConfig(content string) error {
-	err := cnf.nginxManager.CreateOpenTracingTracerConfig(content)
-	return err
+	return cnf.nginxManager.CreateOpenTracingTracerConfig(content)
 }
 
 func (cnf *Configurator) addOrUpdateVirtualServer(virtualServerEx *VirtualServerEx) (Warnings, error) {
@@ -595,8 +671,9 @@ func (cnf *Configurator) addOrUpdateTransportServer(transportServerEx *Transport
 	if cnf.isPlus && cnf.isPrometheusEnabled {
 		cnf.updateTransportServerMetricsLabels(transportServerEx, tsCfg.Upstreams)
 	}
-
 	cnf.nginxManager.CreateStreamConfig(name, content)
+
+	cnf.transportServers[name] = transportServerEx
 
 	// update TLS Passthrough Hosts config in case we have a TLS Passthrough TransportServer
 	// only TLS Passthrough TransportServers have non-empty hosts
@@ -750,7 +827,7 @@ func GenerateCAFileContent(secret *api_v1.Secret) []byte {
 }
 
 // DeleteIngress deletes NGINX configuration for the Ingress resource.
-func (cnf *Configurator) DeleteIngress(key string) error {
+func (cnf *Configurator) DeleteIngress(key string, skipReload bool) error {
 	name := keyToFileName(key)
 	cnf.nginxManager.DeleteConfig(name)
 
@@ -761,15 +838,17 @@ func (cnf *Configurator) DeleteIngress(key string) error {
 		cnf.deleteIngressMetricsLabels(key)
 	}
 
-	if err := cnf.reload(nginx.ReloadForOtherUpdate); err != nil {
-		return fmt.Errorf("error when removing ingress %v: %w", key, err)
+	if !skipReload {
+		if err := cnf.reload(nginx.ReloadForOtherUpdate); err != nil {
+			return fmt.Errorf("error when removing ingress %v: %w", key, err)
+		}
 	}
 
 	return nil
 }
 
 // DeleteVirtualServer deletes NGINX configuration for the VirtualServer resource.
-func (cnf *Configurator) DeleteVirtualServer(key string) error {
+func (cnf *Configurator) DeleteVirtualServer(key string, skipReload bool) error {
 	name := getFileNameForVirtualServerFromKey(key)
 	cnf.nginxManager.DeleteConfig(name)
 
@@ -778,8 +857,10 @@ func (cnf *Configurator) DeleteVirtualServer(key string) error {
 		cnf.deleteVirtualServerMetricsLabels(key)
 	}
 
-	if err := cnf.reload(nginx.ReloadForOtherUpdate); err != nil {
-		return fmt.Errorf("error when removing VirtualServer %v: %w", key, err)
+	if !skipReload {
+		if err := cnf.reload(nginx.ReloadForOtherUpdate); err != nil {
+			return fmt.Errorf("error when removing VirtualServer %v: %w", key, err)
+		}
 	}
 
 	return nil
@@ -1152,26 +1233,61 @@ func (cnf *Configurator) UpdateConfig(cfgParams *ConfigParams, resources Extende
 }
 
 // UpdateTransportServers updates TransportServers.
-func (cnf *Configurator) UpdateTransportServers(updatedTSExes []*TransportServerEx, deletedKeys []string) error {
+func (cnf *Configurator) UpdateTransportServers(updatedTSExes []*TransportServerEx, deletedKeys []string) []error {
+	var errList []error
 	for _, tsEx := range updatedTSExes {
 		_, err := cnf.addOrUpdateTransportServer(tsEx)
 		if err != nil {
-			return fmt.Errorf("error adding or updating TransportServer %v/%v: %w", tsEx.TransportServer.Namespace, tsEx.TransportServer.Name, err)
+			errList = append(errList, fmt.Errorf("error adding or updating TransportServer %v/%v: %w", tsEx.TransportServer.Namespace, tsEx.TransportServer.Name, err))
 		}
 	}
 
 	for _, key := range deletedKeys {
 		err := cnf.deleteTransportServer(key)
 		if err != nil {
-			return fmt.Errorf("error when removing TransportServer %v: %w", key, err)
+			errList = append(errList, fmt.Errorf("error when removing TransportServer %v: %w", key, err))
 		}
 	}
 
 	if err := cnf.reload(nginx.ReloadForOtherUpdate); err != nil {
-		return fmt.Errorf("error when updating TransportServers: %w", err)
+		errList = append(errList, fmt.Errorf("error when updating TransportServers: %w", err))
 	}
 
-	return nil
+	return errList
+}
+
+// BatchDeleteVirtualServers takes a list of VirtualServer resource keys, deletes their configuration, and reloads once
+func (cnf *Configurator) BatchDeleteVirtualServers(deletedKeys []string) []error {
+	var errList []error
+	for _, key := range deletedKeys {
+		err := cnf.DeleteVirtualServer(key, true)
+		if err != nil {
+			errList = append(errList, fmt.Errorf("error when removing VirtualServer %v: %w", key, err))
+		}
+	}
+
+	if err := cnf.reload(nginx.ReloadForOtherUpdate); err != nil {
+		errList = append(errList, fmt.Errorf("error when reloading NGINX for deleted VirtualServers: %w", err))
+	}
+
+	return errList
+}
+
+// BatchDeleteIngresses takes a list of Ingress resource keys, deletes their configuration, and reloads once
+func (cnf *Configurator) BatchDeleteIngresses(deletedKeys []string) []error {
+	var errList []error
+	for _, key := range deletedKeys {
+		err := cnf.DeleteIngress(key, true)
+		if err != nil {
+			errList = append(errList, fmt.Errorf("error when removing Ingress %v: %w", key, err))
+		}
+	}
+
+	if err := cnf.reload(nginx.ReloadForOtherUpdate); err != nil {
+		errList = append(errList, fmt.Errorf("error when reloading NGINX for deleted Ingresses: %w", err))
+	}
+
+	return errList
 }
 
 func keyToFileName(key string) string {
@@ -1437,20 +1553,24 @@ func (cnf *Configurator) addOrUpdateIngressesAndVirtualServers(ingExes []*Ingres
 
 // DeleteAppProtectPolicy updates Ingresses and VirtualServers that use AP Policy after that policy is deleted
 func (cnf *Configurator) DeleteAppProtectPolicy(resource *unstructured.Unstructured, ingExes []*IngressEx, mergeableIngresses []*MergeableIngresses, vsExes []*VirtualServerEx) (Warnings, error) {
+	warnings := newWarnings()
+	var err error
 	if len(ingExes)+len(mergeableIngresses)+len(vsExes) > 0 {
-		cnf.nginxManager.DeleteAppProtectResourceFile(appProtectPolicyFileNameFromUnstruct(resource))
+		warnings, err = cnf.AddOrUpdateAppProtectResource(resource, ingExes, mergeableIngresses, vsExes)
 	}
-
-	return cnf.AddOrUpdateAppProtectResource(resource, ingExes, mergeableIngresses, vsExes)
+	cnf.nginxManager.DeleteAppProtectResourceFile(appProtectPolicyFileNameFromUnstruct(resource))
+	return warnings, err
 }
 
 // DeleteAppProtectLogConf updates Ingresses and VirtualServers that use AP Log Configuration after that policy is deleted
 func (cnf *Configurator) DeleteAppProtectLogConf(resource *unstructured.Unstructured, ingExes []*IngressEx, mergeableIngresses []*MergeableIngresses, vsExes []*VirtualServerEx) (Warnings, error) {
+	warnings := newWarnings()
+	var err error
 	if len(ingExes)+len(mergeableIngresses)+len(vsExes) > 0 {
-		cnf.nginxManager.DeleteAppProtectResourceFile(appProtectLogConfFileNameFromUnstruct(resource))
+		warnings, err = cnf.AddOrUpdateAppProtectResource(resource, ingExes, mergeableIngresses, vsExes)
 	}
-
-	return cnf.AddOrUpdateAppProtectResource(resource, ingExes, mergeableIngresses, vsExes)
+	cnf.nginxManager.DeleteAppProtectResourceFile(appProtectLogConfFileNameFromUnstruct(resource))
+	return warnings, err
 }
 
 // RefreshAppProtectUserSigs writes all valid UDS files to fs and reloads NGINX

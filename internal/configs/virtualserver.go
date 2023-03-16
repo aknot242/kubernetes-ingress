@@ -2,13 +2,13 @@ package configs
 
 import (
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 
 	"github.com/golang/glog"
 	"github.com/nginxinc/kubernetes-ingress/internal/k8s/secrets"
 	"github.com/nginxinc/kubernetes-ingress/internal/nginx"
-	conf_v1alpha1 "github.com/nginxinc/kubernetes-ingress/pkg/apis/configuration/v1alpha1"
 	api_v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -132,17 +132,20 @@ type upstreamNamer struct {
 	namespace string
 }
 
-func newUpstreamNamerForVirtualServer(virtualServer *conf_v1.VirtualServer) *upstreamNamer {
+// NewUpstreamNamerForVirtualServer creates a new namer.
+//
+//nolint:revive
+func NewUpstreamNamerForVirtualServer(virtualServer *conf_v1.VirtualServer) *upstreamNamer {
 	return &upstreamNamer{
 		prefix:    fmt.Sprintf("vs_%s_%s", virtualServer.Namespace, virtualServer.Name),
 		namespace: virtualServer.Namespace,
 	}
 }
 
-func newUpstreamNamerForVirtualServerRoute(
-	virtualServer *conf_v1.VirtualServer,
-	virtualServerRoute *conf_v1.VirtualServerRoute,
-) *upstreamNamer {
+// NewUpstreamNamerForVirtualServerRoute creates a new namer.
+//
+//nolint:revive
+func NewUpstreamNamerForVirtualServerRoute(virtualServer *conf_v1.VirtualServer, virtualServerRoute *conf_v1.VirtualServerRoute) *upstreamNamer {
 	return &upstreamNamer{
 		prefix: fmt.Sprintf(
 			"vs_%s_%s_vsr_%s_%s",
@@ -152,12 +155,6 @@ func newUpstreamNamerForVirtualServerRoute(
 			virtualServerRoute.Name,
 		),
 		namespace: virtualServerRoute.Namespace,
-	}
-}
-
-func newUpstreamNamerForTransportServer(transportServer *conf_v1alpha1.TransportServer) *upstreamNamer {
-	return &upstreamNamer{
-		prefix: fmt.Sprintf("ts_%s_%s", transportServer.Namespace, transportServer.Name),
 	}
 }
 
@@ -214,6 +211,7 @@ func newHealthCheckWithDefaults(upstream conf_v1.Upstream, upstreamName string, 
 		URI:                 uri,
 		Interval:            "5s",
 		Jitter:              "0s",
+		KeepaliveTime:       "60s",
 		Fails:               1,
 		Passes:              1,
 		ProxyPass:           fmt.Sprintf("%v://%v", generateProxyPassProtocol(upstream.TLS.Enable), upstreamName),
@@ -334,7 +332,7 @@ func (vsc *virtualServerConfigurator) GenerateVirtualServerConfig(
 	// necessary for generateLocation to know what Upstream each Location references
 	crUpstreams := make(map[string]conf_v1.Upstream)
 
-	virtualServerUpstreamNamer := newUpstreamNamerForVirtualServer(vsEx.VirtualServer)
+	virtualServerUpstreamNamer := NewUpstreamNamerForVirtualServer(vsEx.VirtualServer)
 	var upstreams []version2.Upstream
 	var statusMatches []version2.StatusMatch
 	var healthChecks []version2.HealthCheck
@@ -373,7 +371,7 @@ func (vsc *virtualServerConfigurator) GenerateVirtualServerConfig(
 	}
 	// generate upstreams for each VirtualServerRoute
 	for _, vsr := range vsEx.VirtualServerRoutes {
-		upstreamNamer := newUpstreamNamerForVirtualServerRoute(vsEx.VirtualServer, vsr)
+		upstreamNamer := NewUpstreamNamerForVirtualServerRoute(vsEx.VirtualServer, vsr)
 		for _, u := range vsr.Spec.Upstreams {
 			if (sslConfig == nil || !vsc.cfgParams.HTTP2) && isGRPC(u.Type) {
 				vsc.addWarningf(vsr, "gRPC cannot be configured for upstream %s. gRPC requires enabled HTTP/2 and TLS termination", u.Name)
@@ -523,7 +521,7 @@ func (vsc *virtualServerConfigurator) GenerateVirtualServerConfig(
 	// generate config for subroutes of each VirtualServerRoute
 	for _, vsr := range vsEx.VirtualServerRoutes {
 		isVSR := true
-		upstreamNamer := newUpstreamNamerForVirtualServerRoute(vsEx.VirtualServer, vsr)
+		upstreamNamer := NewUpstreamNamerForVirtualServerRoute(vsEx.VirtualServer, vsr)
 		for _, r := range vsr.Spec.Subroutes {
 			errorPages := errorPageDetails{
 				pages: r.ErrorPages,
@@ -817,27 +815,46 @@ func (p *policiesCfg) addJWTAuthConfig(
 		res.addWarningf("Multiple jwt policies in the same context is not valid. JWT policy %s will be ignored", polKey)
 		return res
 	}
+	if jwtAuth.Secret != "" {
+		jwtSecretKey := fmt.Sprintf("%v/%v", polNamespace, jwtAuth.Secret)
+		secretRef := secretRefs[jwtSecretKey]
+		var secretType api_v1.SecretType
+		if secretRef.Secret != nil {
+			secretType = secretRef.Secret.Type
+		}
+		if secretType != "" && secretType != secrets.SecretTypeJWK {
+			res.addWarningf("JWT policy %s references a secret %s of a wrong type '%s', must be '%s'", polKey, jwtSecretKey, secretType, secrets.SecretTypeJWK)
+			res.isError = true
+			return res
+		} else if secretRef.Error != nil {
+			res.addWarningf("JWT policy %s references an invalid secret %s: %v", polKey, jwtSecretKey, secretRef.Error)
+			res.isError = true
+			return res
+		}
 
-	jwtSecretKey := fmt.Sprintf("%v/%v", polNamespace, jwtAuth.Secret)
-	secretRef := secretRefs[jwtSecretKey]
-	var secretType api_v1.SecretType
-	if secretRef.Secret != nil {
-		secretType = secretRef.Secret.Type
-	}
-	if secretType != "" && secretType != secrets.SecretTypeJWK {
-		res.addWarningf("JWT policy %s references a secret %s of a wrong type '%s', must be '%s'", polKey, jwtSecretKey, secretType, secrets.SecretTypeJWK)
-		res.isError = true
+		p.JWTAuth = &version2.JWTAuth{
+			Secret: secretRef.Path,
+			Realm:  jwtAuth.Realm,
+			Token:  jwtAuth.Token,
+		}
 		return res
-	} else if secretRef.Error != nil {
-		res.addWarningf("JWT policy %s references an invalid secret %s: %v", polKey, jwtSecretKey, secretRef.Error)
-		res.isError = true
-		return res
-	}
+	} else if jwtAuth.JwksURI != "" {
+		uri, _ := url.Parse(jwtAuth.JwksURI)
 
-	p.JWTAuth = &version2.JWTAuth{
-		Secret: secretRef.Path,
-		Realm:  jwtAuth.Realm,
-		Token:  jwtAuth.Token,
+		JwksURI := &version2.JwksURI{
+			JwksScheme: uri.Scheme,
+			JwksHost:   uri.Hostname(),
+			JwksPort:   uri.Port(),
+			JwksPath:   uri.Path,
+		}
+
+		p.JWTAuth = &version2.JWTAuth{
+			JwksURI:  *JwksURI,
+			Realm:    jwtAuth.Realm,
+			Token:    jwtAuth.Token,
+			KeyCache: jwtAuth.KeyCache,
+		}
+		return res
 	}
 	return res
 }
@@ -1029,9 +1046,14 @@ func (p *policiesCfg) addOIDCConfig(
 		if scope == "" {
 			scope = "openid"
 		}
+		authExtraArgs := ""
+		if oidc.AuthExtraArgs != nil {
+			authExtraArgs = strings.Join(oidc.AuthExtraArgs, "&")
+		}
 
 		oidcPolCfg.oidc = &version2.OIDC{
 			AuthEndpoint:   oidc.AuthEndpoint,
+			AuthExtraArgs:  authExtraArgs,
 			TokenEndpoint:  oidc.TokenEndpoint,
 			JwksURI:        oidc.JWKSURI,
 			ClientID:       oidc.ClientID,
@@ -1080,6 +1102,10 @@ func (p *policiesCfg) addWAFConfig(
 			res.isError = true
 			return res
 		}
+	}
+
+	if waf.ApBundle != "" {
+		p.WAF.ApBundle = appProtectBundleFolder + waf.ApBundle
 	}
 
 	if waf.SecurityLog != nil && waf.SecurityLogs == nil {
@@ -1373,6 +1399,10 @@ func generateHealthCheck(
 
 	if upstream.HealthCheck.Jitter != "" {
 		hc.Jitter = generateTime(upstream.HealthCheck.Jitter)
+	}
+
+	if upstream.HealthCheck.KeepaliveTime != "" {
+		hc.KeepaliveTime = generateTime(upstream.HealthCheck.KeepaliveTime)
 	}
 
 	if upstream.HealthCheck.Fails > 0 {
@@ -2252,7 +2282,7 @@ func createUpstreamsForPlus(
 	var upstreams []version2.Upstream
 
 	isPlus := true
-	upstreamNamer := newUpstreamNamerForVirtualServer(virtualServerEx.VirtualServer)
+	upstreamNamer := NewUpstreamNamerForVirtualServer(virtualServerEx.VirtualServer)
 	vsc := newVirtualServerConfigurator(baseCfgParams, isPlus, false, staticParams, false)
 
 	for _, u := range virtualServerEx.VirtualServer.Spec.Upstreams {
@@ -2273,7 +2303,7 @@ func createUpstreamsForPlus(
 	}
 
 	for _, vsr := range virtualServerEx.VirtualServerRoutes {
-		upstreamNamer = newUpstreamNamerForVirtualServerRoute(virtualServerEx.VirtualServer, vsr)
+		upstreamNamer = NewUpstreamNamerForVirtualServerRoute(virtualServerEx.VirtualServer, vsr)
 		for _, u := range vsr.Spec.Upstreams {
 			isExternalNameSvc := virtualServerEx.ExternalNameSvcs[GenerateExternalNameSvcKey(vsr.Namespace, u.Service)]
 			if isExternalNameSvc {

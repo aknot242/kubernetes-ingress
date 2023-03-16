@@ -1,7 +1,7 @@
 import pytest
 from settings import DEPLOYMENTS, TEST_DATA
-from suite.fixtures import PublicEndpoint
-from suite.resources_utils import (
+from suite.fixtures.fixtures import PublicEndpoint
+from suite.utils.resources_utils import (
     create_items_from_yaml,
     delete_items_from_yaml,
     get_first_pod_name,
@@ -9,7 +9,7 @@ from suite.resources_utils import (
     replace_configmap_from_yaml,
     wait_before_test,
 )
-from suite.yaml_utils import get_first_ingress_host_from_yaml, get_name_from_yaml
+from suite.utils.yaml_utils import get_first_ingress_host_from_yaml, get_name_from_yaml
 
 
 class CustomAnnotationsSetup:
@@ -54,14 +54,15 @@ def custom_annotations_setup(
     ic_pod_name = get_first_pod_name(kube_apis.v1, ingress_controller_prerequisites.namespace)
 
     def fin():
-        print("Clean up Custom Annotations Example:")
-        replace_configmap_from_yaml(
-            kube_apis.v1,
-            ingress_controller_prerequisites.config_map["metadata"]["name"],
-            ingress_controller_prerequisites.namespace,
-            f"{DEPLOYMENTS}/common/nginx-config.yaml",
-        )
-        delete_items_from_yaml(kube_apis, ing_src, test_namespace)
+        if request.config.getoption("--skip-fixture-teardown") == "no":
+            print("Clean up Custom Annotations Example:")
+            replace_configmap_from_yaml(
+                kube_apis.v1,
+                ingress_controller_prerequisites.config_map["metadata"]["name"],
+                ingress_controller_prerequisites.namespace,
+                f"{DEPLOYMENTS}/common/nginx-config.yaml",
+            )
+            delete_items_from_yaml(kube_apis, ing_src, test_namespace)
 
     request.addfinalizer(fin)
 

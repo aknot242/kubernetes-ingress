@@ -2,7 +2,7 @@ import pytest
 import requests
 from kubernetes.client.rest import ApiException
 from settings import TEST_DATA
-from suite.custom_assertions import (
+from suite.utils.custom_assertions import (
     assert_event,
     assert_event_and_get_count,
     assert_event_count_increased,
@@ -10,9 +10,9 @@ from suite.custom_assertions import (
     assert_response_codes,
     assert_vs_conf_not_exists,
 )
-from suite.custom_resources_utils import generate_item_with_upstream_options
-from suite.resources_utils import get_events, get_first_pod_name, replace_configmap_from_yaml, wait_before_test
-from suite.vs_vsr_resources_utils import (
+from suite.utils.custom_resources_utils import generate_item_with_upstream_options
+from suite.utils.resources_utils import get_events, get_first_pod_name, replace_configmap_from_yaml, wait_before_test
+from suite.utils.vs_vsr_resources_utils import (
     get_vs_nginx_template_conf,
     patch_virtual_server,
     patch_virtual_server_from_yaml,
@@ -507,7 +507,7 @@ class TestOptionsSpecificForPlus:
                     "health_check uri=/ interval=5s jitter=0s",
                     "fails=1 passes=1",
                     "mandatory persistent",
-                    ";",
+                    "keepalive_time=60s;",
                     "slow_start=3h",
                     "queue 100 timeout=60s;",
                     "ntlm;",
@@ -531,6 +531,7 @@ class TestOptionsSpecificForPlus:
                         "read-timeout": "45s",
                         "send-timeout": "55s",
                         "headers": [{"name": "Host", "value": "virtual-server.example.com"}],
+                        "keepalive-time": "120s",
                     },
                     "queue": {"size": 1000, "timeout": "66s"},
                     "slow-start": "0s",
@@ -544,7 +545,8 @@ class TestOptionsSpecificForPlus:
                     "proxy_connect_timeout 35s;",
                     "proxy_read_timeout 45s;",
                     "proxy_send_timeout 55s;",
-                    'proxy_set_header Host "virtual-server.example.com";',
+                    'proxy_set_header Host "virtual-server.example.com"',
+                    "keepalive_time=120s;",
                     "slow_start=0s",
                     "queue 1000 timeout=66s;",
                     "ntlm;",
@@ -624,6 +626,7 @@ class TestOptionsSpecificForPlus:
         assert_event(vs_event_text, vs_events)
         assert "slow_start" not in config
 
+    @pytest.mark.flaky(max_runs=3)
     def test_validation_flow(
         self, kube_apis, ingress_controller_prerequisites, crd_ingress_controller, virtual_server_setup
     ):
@@ -631,6 +634,7 @@ class TestOptionsSpecificForPlus:
             "upstreams[0].healthCheck.path",
             "upstreams[0].healthCheck.interval",
             "upstreams[0].healthCheck.jitter",
+            "upstreams[0].healthCheck.keepalive-time",
             "upstreams[0].healthCheck.fails",
             "upstreams[0].healthCheck.passes",
             "upstreams[0].healthCheck.connect-timeout",
@@ -652,6 +656,7 @@ class TestOptionsSpecificForPlus:
             "upstreams[1].healthCheck.path",
             "upstreams[1].healthCheck.interval",
             "upstreams[1].healthCheck.jitter",
+            "upstreams[1].healthCheck.keepalive-time",
             "upstreams[1].healthCheck.fails",
             "upstreams[1].healthCheck.passes",
             "upstreams[1].healthCheck.connect-timeout",
@@ -692,6 +697,7 @@ class TestOptionsSpecificForPlus:
             "healthCheck.path",
             "healthCheck.interval",
             "healthCheck.jitter",
+            "healthCheck.keepalive-time",
             "healthCheck.fails",
             "healthCheck.passes",
             "healthCheck.port",

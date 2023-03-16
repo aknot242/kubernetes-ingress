@@ -4,8 +4,8 @@ from datetime import datetime
 
 import pytest
 import requests
-from settings import DEPLOYMENTS, TEST_DATA
-from suite.custom_resources_utils import (
+from settings import TEST_DATA
+from suite.utils.custom_resources_utils import (
     create_dos_logconf_from_yaml,
     create_dos_policy_from_yaml,
     create_dos_protected_from_yaml,
@@ -13,14 +13,13 @@ from suite.custom_resources_utils import (
     delete_dos_policy,
     delete_dos_protected,
 )
-from suite.dos_utils import (
+from suite.utils.dos_utils import (
     check_learning_status_with_admd_s,
     clean_good_bad_clients,
     find_in_log,
     log_content_to_dic,
-    print_admd_log,
 )
-from suite.resources_utils import (
+from suite.utils.resources_utils import (
     clear_file_contents,
     create_dos_arbitrator,
     create_example_app,
@@ -33,6 +32,7 @@ from suite.resources_utils import (
     ensure_response_from_backend,
     get_file_contents,
     get_ingress_nginx_template_conf,
+    get_nginx_template_conf,
     get_pods_amount_with_name,
     get_test_file_name,
     nginx_reload,
@@ -42,7 +42,7 @@ from suite.resources_utils import (
     wait_until_all_pods_are_ready,
     write_to_json,
 )
-from suite.yaml_utils import get_first_ingress_host_from_yaml
+from suite.utils.yaml_utils import get_first_ingress_host_from_yaml
 
 src_ing_yaml = f"{TEST_DATA}/dos/dos-ingress.yaml"
 valid_resp_addr = "Server address:"
@@ -126,14 +126,15 @@ def dos_setup(
             nginx_reload(kube_apis.v1, item.metadata.name, ingress_controller_prerequisites.namespace)
 
     def fin():
-        print("Clean up:")
-        delete_dos_policy(kube_apis.custom_objects, pol_name, test_namespace)
-        delete_dos_logconf(kube_apis.custom_objects, log_name, test_namespace)
-        delete_dos_protected(kube_apis.custom_objects, protected_name, test_namespace)
-        delete_common_app(kube_apis, "dos", test_namespace)
-        delete_items_from_yaml(kube_apis, src_sec_yaml, test_namespace)
-        write_to_json(f"reload-{get_test_file_name(request.node.fspath)}.json", reload_times)
-        clean_good_bad_clients()
+        if request.config.getoption("--skip-fixture-teardown") == "no":
+            print("Clean up:")
+            delete_dos_policy(kube_apis.custom_objects, pol_name, test_namespace)
+            delete_dos_logconf(kube_apis.custom_objects, log_name, test_namespace)
+            delete_dos_protected(kube_apis.custom_objects, protected_name, test_namespace)
+            delete_common_app(kube_apis, "dos", test_namespace)
+            delete_items_from_yaml(kube_apis, src_sec_yaml, test_namespace)
+            write_to_json(f"reload-{get_test_file_name(request.node.fspath)}.json", reload_times)
+            clean_good_bad_clients()
 
     request.addfinalizer(fin)
 
@@ -178,6 +179,8 @@ class TestDos:
             f"app_protect_dos_security_log /etc/nginx/dos/logconfs/{test_namespace}_{dos_setup.log_name}.json syslog:server=syslog-svc.{ingress_controller_prerequisites.namespace}.svc.cluster.local:514;",
         ]
 
+        conf_nginx_directive = ["app_protect_dos_api on;", "location = /dashboard-dos.html"]
+
         create_ingress_with_dos_annotations(
             kube_apis,
             src_ing_yaml,
@@ -194,10 +197,15 @@ class TestDos:
             kube_apis.v1, test_namespace, "dos-ingress", pod_name, "nginx-ingress"
         )
 
+        nginx_config = get_nginx_template_conf(kube_apis.v1, ingress_controller_prerequisites.namespace, pod_name)
+
         delete_items_from_yaml(kube_apis, src_ing_yaml, test_namespace)
 
         for _ in conf_directive:
             assert _ in result_conf
+
+        for _ in conf_nginx_directive:
+            assert _ in nginx_config
 
     def test_dos_sec_logs_on(
         self,
@@ -436,7 +444,7 @@ class TestDos:
         Test App Protect Dos: Check new IC pod get learning info with arbitrator from different namespace
         """
 
-        print("Remove dos arbitrator from namesapce: ", ingress_controller_prerequisites.namespace)
+        print("Remove dos arbitrator from namespace: ", ingress_controller_prerequisites.namespace)
         delete_dos_arbitrator(
             kube_apis.v1, kube_apis.apps_v1_api, "appprotect-dos-arb", ingress_controller_prerequisites.namespace
         )

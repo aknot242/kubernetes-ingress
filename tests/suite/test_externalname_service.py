@@ -1,8 +1,8 @@
 import pytest
 import requests
 from settings import TEST_DATA
-from suite.fixtures import PublicEndpoint
-from suite.resources_utils import (
+from suite.fixtures.fixtures import PublicEndpoint
+from suite.utils.resources_utils import (
     create_deployment_with_name,
     create_ingress_from_yaml,
     create_namespace_with_name_from_yaml,
@@ -19,7 +19,7 @@ from suite.resources_utils import (
     replace_configmap_from_yaml,
     wait_before_test,
 )
-from suite.yaml_utils import get_first_ingress_host_from_yaml
+from suite.utils.yaml_utils import get_first_ingress_host_from_yaml
 
 
 class ExternalNameSetup:
@@ -89,16 +89,17 @@ def external_name_setup(
     ic_pod_name = get_first_pod_name(kube_apis.v1, ingress_controller_prerequisites.namespace)
 
     def fin():
-        print("Clean up External-Name-Example:")
-        delete_namespace(kube_apis.v1, external_ns)
-        replace_configmap(
-            kube_apis.v1,
-            config_map_name,
-            ingress_controller_prerequisites.namespace,
-            ingress_controller_prerequisites.config_map,
-        )
-        delete_ingress(kube_apis.networking_v1, ingress_name, test_namespace)
-        delete_service(kube_apis.v1, svc_name, test_namespace)
+        if request.config.getoption("--skip-fixture-teardown") == "no":
+            print("Clean up External-Name-Example:")
+            delete_namespace(kube_apis.v1, external_ns)
+            replace_configmap(
+                kube_apis.v1,
+                config_map_name,
+                ingress_controller_prerequisites.namespace,
+                ingress_controller_prerequisites.config_map,
+            )
+            delete_ingress(kube_apis.networking_v1, ingress_name, test_namespace)
+            delete_service(kube_apis.v1, svc_name, test_namespace)
 
     request.addfinalizer(fin)
 

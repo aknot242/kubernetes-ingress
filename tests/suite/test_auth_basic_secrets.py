@@ -3,8 +3,8 @@ from base64 import b64encode
 import pytest
 import requests
 from settings import TEST_DATA
-from suite.fixtures import PublicEndpoint
-from suite.resources_utils import (
+from suite.fixtures.fixtures import PublicEndpoint
+from suite.utils.resources_utils import (
     create_example_app,
     create_items_from_yaml,
     create_secret_from_yaml,
@@ -17,7 +17,7 @@ from suite.resources_utils import (
     wait_before_test,
     wait_until_all_pods_are_ready,
 )
-from suite.yaml_utils import get_first_ingress_host_from_yaml
+from suite.utils.yaml_utils import get_first_ingress_host_from_yaml
 
 
 def to_base64(b64_string):
@@ -56,7 +56,7 @@ class AuthBasicSecret:
 def auth_basic_secrets_setup(
     request, kube_apis, ingress_controller_endpoint, ingress_controller, test_namespace
 ) -> AuthBasicSecretsSetup:
-    with open(f"{TEST_DATA}/auth-basic-secrets/credentials/credentials.txt", "r") as credentials_file:
+    with open(f"{TEST_DATA}/auth-basic-secrets/credentials/credentials.txt") as credentials_file:
         credentials = credentials_file.read().replace("\n", "")
     print("------------------------- Deploy Auth Basic Secrets Example -----------------------------------")
     create_items_from_yaml(
@@ -72,11 +72,14 @@ def auth_basic_secrets_setup(
     )
 
     def fin():
-        print("Clean up the Auth Basic Secrets Application:")
-        delete_common_app(kube_apis, "simple", test_namespace)
-        delete_items_from_yaml(
-            kube_apis, f"{TEST_DATA}/auth-basic-secrets/{request.param}/auth-basic-secrets-ingress.yaml", test_namespace
-        )
+        if request.config.getoption("--skip-fixture-teardown") == "no":
+            print("Clean up the Auth Basic Secrets Application:")
+            delete_common_app(kube_apis, "simple", test_namespace)
+            delete_items_from_yaml(
+                kube_apis,
+                f"{TEST_DATA}/auth-basic-secrets/{request.param}/auth-basic-secrets-ingress.yaml",
+                test_namespace,
+            )
 
     request.addfinalizer(fin)
 
@@ -93,9 +96,10 @@ def auth_basic_secret(
     wait_before_test(1)
 
     def fin():
-        print("Delete Secret:")
-        if is_secret_present(kube_apis.v1, secret_name, test_namespace):
-            delete_secret(kube_apis.v1, secret_name, test_namespace)
+        if request.config.getoption("--skip-fixture-teardown") == "no":
+            print("Delete Secret:")
+            if is_secret_present(kube_apis.v1, secret_name, test_namespace):
+                delete_secret(kube_apis.v1, secret_name, test_namespace)
 
     request.addfinalizer(fin)
 

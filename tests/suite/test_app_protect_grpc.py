@@ -1,28 +1,27 @@
 import grpc
 import pytest
 from settings import DEPLOYMENTS, TEST_DATA
-from suite.ap_resources_utils import (
+from suite.grpc.helloworld_pb2 import HelloRequest
+from suite.grpc.helloworld_pb2_grpc import GreeterStub
+from suite.utils.ap_resources_utils import (
     create_ap_logconf_from_yaml,
     create_ap_policy_from_yaml,
     delete_ap_logconf,
     delete_ap_policy,
 )
-from suite.grpc.helloworld_pb2 import HelloRequest
-from suite.grpc.helloworld_pb2_grpc import GreeterStub
-from suite.resources_utils import (
+from suite.utils.resources_utils import (
     create_example_app,
     create_ingress_with_ap_annotations,
     create_items_from_yaml,
     delete_common_app,
     delete_items_from_yaml,
     get_file_contents,
-    get_service_endpoint,
     replace_configmap_from_yaml,
     wait_before_test,
     wait_until_all_pods_are_ready,
 )
-from suite.ssl_utils import get_certificate
-from suite.yaml_utils import get_first_ingress_host_from_yaml
+from suite.utils.ssl_utils import get_certificate
+from suite.utils.yaml_utils import get_first_ingress_host_from_yaml
 
 log_loc = f"/var/log/messages"
 valid_resp_txt = "Hello"
@@ -111,19 +110,20 @@ def backend_setup(
         pytest.fail(f"AP GRPC setup failed")
 
     def fin():
-        print("Clean up:")
-        delete_items_from_yaml(kube_apis, src_syslog_yaml, test_namespace)
-        delete_items_from_yaml(kube_apis, src_ing_yaml, test_namespace)
-        delete_ap_policy(kube_apis.custom_objects, pol_name, test_namespace)
-        delete_ap_logconf(kube_apis.custom_objects, log_name, test_namespace)
-        delete_common_app(kube_apis, "grpc", test_namespace)
-        delete_items_from_yaml(kube_apis, src_sec_yaml, test_namespace)
-        replace_configmap_from_yaml(
-            kube_apis.v1,
-            ingress_controller_prerequisites.config_map["metadata"]["name"],
-            ingress_controller_prerequisites.namespace,
-            f"{DEPLOYMENTS}/common/nginx-config.yaml",
-        )
+        if request.config.getoption("--skip-fixture-teardown") == "no":
+            print("Clean up:")
+            delete_items_from_yaml(kube_apis, src_syslog_yaml, test_namespace)
+            delete_items_from_yaml(kube_apis, src_ing_yaml, test_namespace)
+            delete_ap_policy(kube_apis.custom_objects, pol_name, test_namespace)
+            delete_ap_logconf(kube_apis.custom_objects, log_name, test_namespace)
+            delete_common_app(kube_apis, "grpc", test_namespace)
+            delete_items_from_yaml(kube_apis, src_sec_yaml, test_namespace)
+            replace_configmap_from_yaml(
+                kube_apis.v1,
+                ingress_controller_prerequisites.config_map["metadata"]["name"],
+                ingress_controller_prerequisites.namespace,
+                f"{DEPLOYMENTS}/common/nginx-config.yaml",
+            )
 
     request.addfinalizer(fin)
 

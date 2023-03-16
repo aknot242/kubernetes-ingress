@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/nginxinc/kubernetes-ingress/internal/configs"
 	"github.com/nginxinc/kubernetes-ingress/internal/configs/version1"
 	"github.com/nginxinc/kubernetes-ingress/internal/configs/version2"
+	"github.com/nginxinc/kubernetes-ingress/internal/healthcheck"
 	"github.com/nginxinc/kubernetes-ingress/internal/k8s"
 	"github.com/nginxinc/kubernetes-ingress/internal/k8s/secrets"
 	"github.com/nginxinc/kubernetes-ingress/internal/metrics"
@@ -37,9 +39,19 @@ import (
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
+// Injected during build
+var version string
+
+const (
+	nginxVersionLabel = "app.nginx.org/version"
+	versionLabel      = "app.kubernetes.io/version"
+)
+
 func main() {
-	binaryInfo, versionInfo := getBuildInfo()
-	parseFlags(binaryInfo, versionInfo)
+	commitHash, commitTime, dirtyBuild := getBuildInfo()
+	fmt.Printf("NGINX Ingress Controller Version=%v Commit=%v Date=%v DirtyState=%v Arch=%v/%v Go=%v\n", version, commitHash, commitTime, dirtyBuild, runtime.GOOS, runtime.GOARCH, runtime.Version())
+
+	parseFlags()
 
 	config, kubeClient := createConfigAndKubeClient()
 
@@ -47,7 +59,7 @@ func main() {
 
 	validateIngressClass(kubeClient)
 
-	checkNamespaceExists(kubeClient)
+	checkNamespaces(kubeClient)
 
 	dynClient, confClient := createCustomClients(config)
 
@@ -57,7 +69,9 @@ func main() {
 
 	nginxManager, useFakeNginxManager := createNginxManager(managerCollector)
 
-	getNginxVersionInfo(nginxManager)
+	nginxVersion := getNginxVersionInfo(nginxManager)
+
+	updateSelfWithVersionInfo(kubeClient, version, nginxVersion)
 
 	templateExecutor, templateExecutorV2 := createTemplateExecutors()
 
@@ -114,6 +128,10 @@ func main() {
 	transportServerValidator := cr_validation.NewTransportServerValidator(*enableTLSPassthrough, *enableSnippets, *nginxPlus)
 	virtualServerValidator := cr_validation.NewVirtualServerValidator(cr_validation.IsPlus(*nginxPlus), cr_validation.IsDosEnabled(*appProtectDos), cr_validation.IsCertManagerEnabled(*enableCertManager), cr_validation.IsExternalDNSEnabled(*enableExternalDNS))
 
+	if *enableServiceInsight {
+		createHealthProbeEndpoint(kubeClient, plusClient, cnf)
+	}
+
 	lbcInput := k8s.NewLoadBalancerControllerInput{
 		KubeClient:                   kubeClient,
 		ConfClient:                   confClient,
@@ -121,6 +139,7 @@ func main() {
 		RestConfig:                   config,
 		ResyncPeriod:                 30 * time.Second,
 		Namespace:                    watchNamespaces,
+		SecretNamespace:              watchSecretNamespaces,
 		NginxConfigurator:            cnf,
 		DefaultServerSecret:          *defaultServerSecret,
 		AppProtectEnabled:            *appProtect,
@@ -151,6 +170,7 @@ func main() {
 		CertManagerEnabled:           *enableCertManager,
 		ExternalDNSEnabled:           *enableExternalDNS,
 		IsIPV6Disabled:               *disableIPV6,
+		WatchNamespaceLabel:          *watchNamespaceLabel,
 	}
 
 	lbc := k8s.NewLoadBalancerController(lbcInput)
@@ -213,7 +233,7 @@ func kubernetesVersionInfo(kubeClient kubernetes.Interface) {
 	}
 	glog.Infof("Kubernetes version: %v", k8sVersion)
 
-	minK8sVersion, err := util_version.ParseGeneric("1.19.0")
+	minK8sVersion, err := util_version.ParseGeneric("1.22.0")
 	if err != nil {
 		glog.Fatalf("unexpected error parsing minimum supported version: %v", err)
 	}
@@ -234,8 +254,27 @@ func validateIngressClass(kubeClient kubernetes.Interface) {
 	}
 }
 
-func checkNamespaceExists(kubeClient kubernetes.Interface) {
-	for _, ns := range watchNamespaces {
+func checkNamespaces(kubeClient kubernetes.Interface) {
+	if *watchNamespaceLabel != "" {
+		// bootstrap the watched namespace list
+		var newWatchNamespaces []string
+		nsList, err := kubeClient.CoreV1().Namespaces().List(context.TODO(), meta_v1.ListOptions{LabelSelector: *watchNamespaceLabel})
+		if err != nil {
+			glog.Errorf("error when getting Namespaces with the label selector %v: %v", watchNamespaceLabel, err)
+		}
+		for _, ns := range nsList.Items {
+			newWatchNamespaces = append(newWatchNamespaces, ns.Name)
+		}
+		watchNamespaces = newWatchNamespaces
+		glog.Infof("Namespaces watched using label %v: %v", *watchNamespaceLabel, watchNamespaces)
+	} else {
+		checkNamespaceExists(kubeClient, watchNamespaces)
+	}
+	checkNamespaceExists(kubeClient, watchSecretNamespaces)
+}
+
+func checkNamespaceExists(kubeClient kubernetes.Interface, namespaces []string) {
+	for _, ns := range namespaces {
 		if ns != "" {
 			_, err := kubeClient.CoreV1().Namespaces().Get(context.TODO(), ns, meta_v1.GetOptions{})
 			if err != nil {
@@ -335,7 +374,7 @@ func createNginxManager(managerCollector collectors.ManagerCollector) (nginx.Man
 	return nginxManager, useFakeNginxManager
 }
 
-func getNginxVersionInfo(nginxManager nginx.Manager) {
+func getNginxVersionInfo(nginxManager nginx.Manager) string {
 	nginxVersion := nginxManager.Version()
 	isPlus := strings.Contains(nginxVersion, "plus")
 	glog.Infof("Using %s", nginxVersion)
@@ -345,6 +384,7 @@ func getNginxVersionInfo(nginxManager nginx.Manager) {
 	} else if !*nginxPlus && isPlus {
 		glog.Fatal("NGINX Plus binary found without NGINX Plus flag (-nginx-plus)")
 	}
+	return nginxVersion
 }
 
 func startApAgentsAndPlugins(nginxManager nginx.Manager) (chan error, chan error, chan error) {
@@ -417,6 +457,10 @@ func createGlobalConfigurationValidator() *cr_validation.GlobalConfigurationVali
 	}
 	if *enablePrometheusMetrics {
 		forbiddenListenerPorts[*prometheusMetricsListenPort] = true
+	}
+
+	if *enableServiceInsight {
+		forbiddenListenerPorts[*serviceInsightListenPort] = true
 	}
 
 	return cr_validation.NewGlobalConfigurationValidator(forbiddenListenerPorts)
@@ -647,6 +691,22 @@ func createPlusAndLatencyCollectors(
 	return plusCollector, syslogListener, lc
 }
 
+func createHealthProbeEndpoint(kubeClient *kubernetes.Clientset, plusClient *client.NginxClient, cnf *configs.Configurator) {
+	if !*enableServiceInsight {
+		return
+	}
+	var serviceInsightSecret *api_v1.Secret
+	var err error
+
+	if *serviceInsightTLSSecretName != "" {
+		serviceInsightSecret, err = getAndValidateSecret(kubeClient, *serviceInsightTLSSecretName)
+		if err != nil {
+			glog.Fatalf("Error trying to get the service insight TLS secret %v: %v", *serviceInsightTLSSecretName, err)
+		}
+	}
+	go healthcheck.RunHealthCheck(*serviceInsightListenPort, plusClient, cnf, serviceInsightSecret)
+}
+
 func processGlobalConfiguration() {
 	if *globalConfiguration != "" {
 		_, _, err := k8s.ParseNamespaceName(*globalConfiguration)
@@ -693,4 +753,30 @@ func processConfigMaps(kubeClient *kubernetes.Clientset, cfgParams *configs.Conf
 		}
 	}
 	return cfgParams
+}
+
+func updateSelfWithVersionInfo(kubeClient *kubernetes.Clientset, version string, nginxVersion string) {
+	pod, err := kubeClient.CoreV1().Pods(os.Getenv("POD_NAMESPACE")).Get(context.TODO(), os.Getenv("POD_NAME"), meta_v1.GetOptions{})
+	if err != nil {
+		glog.Errorf("Error getting pod: %v", err)
+		return
+	}
+
+	// Copy pod and update the labels.
+	newPod := pod.DeepCopy()
+	labels := newPod.ObjectMeta.Labels
+	if labels == nil {
+		labels = make(map[string]string)
+	}
+	labels[nginxVersionLabel] = strings.TrimSuffix(strings.Split(nginxVersion, "/")[1], "\n")
+	labels[versionLabel] = strings.TrimPrefix(version, "v")
+	newPod.ObjectMeta.Labels = labels
+
+	_, err = kubeClient.CoreV1().Pods(newPod.ObjectMeta.Namespace).Update(context.TODO(), newPod, meta_v1.UpdateOptions{})
+	if err != nil {
+		glog.Errorf("Error updating pod with labels: %v", err)
+		return
+	}
+
+	glog.Infof("Pod label updated: %s", pod.ObjectMeta.Name)
 }

@@ -36,7 +36,7 @@ var vsGVK = vsapi.SchemeGroupVersion.WithKind("VirtualServer")
 type SyncFn func(context.Context, *vsapi.VirtualServer) error
 
 // SyncFnFor knows how to reconcile VirtualServer DNSEndpoint object.
-func SyncFnFor(rec record.EventRecorder, client clientset.Interface, extdnsLister []extdnslisters.DNSEndpointLister) SyncFn {
+func SyncFnFor(rec record.EventRecorder, client clientset.Interface, ig map[string]*namespacedInformer) SyncFn {
 	return func(ctx context.Context, vs *vsapi.VirtualServer) error {
 		// Do nothing if ExternalDNS is not present (nil) in VS or is not enabled.
 		if !vs.Spec.ExternalDNS.Enable {
@@ -44,7 +44,7 @@ func SyncFnFor(rec record.EventRecorder, client clientset.Interface, extdnsListe
 		}
 
 		if vs.Status.ExternalEndpoints == nil {
-			// It can take time for the external endpoints to sync
+			// It can take time for the external endpoints to sync - kick it back to the queue
 			glog.V(3).Info("Failed to determine external endpoints - retrying")
 			return fmt.Errorf("failed to determine external endpoints")
 		}
@@ -56,9 +56,11 @@ func SyncFnFor(rec record.EventRecorder, client clientset.Interface, extdnsListe
 			return err
 		}
 
-		newDNSEndpoint, updateDNSEndpoint, err := buildDNSEndpoint(extdnsLister, vs, targets, recordType)
+		nsi := getNamespacedInformer(vs.Namespace, ig)
+
+		newDNSEndpoint, updateDNSEndpoint, err := buildDNSEndpoint(nsi.extdnslister, vs, targets, recordType)
 		if err != nil {
-			glog.Errorf("error message here %s", err)
+			glog.Errorf("incorrect DNSEndpoint config for VirtualServer resource: %s", err)
 			rec.Eventf(vs, corev1.EventTypeWarning, reasonBadConfig, "Incorrect DNSEndpoint config for VirtualServer resource: %s", err)
 			return err
 		}
@@ -70,6 +72,11 @@ func SyncFnFor(rec record.EventRecorder, client clientset.Interface, extdnsListe
 			glog.V(3).Infof("Creating DNSEndpoint for VirtualServer resource: %v", vs.Name)
 			dep, err = client.ExternaldnsV1().DNSEndpoints(newDNSEndpoint.Namespace).Create(ctx, newDNSEndpoint, metav1.CreateOptions{})
 			if err != nil {
+				if apierrors.IsAlreadyExists(err) {
+					// Another replica likely created the DNSEndpoint since we last checked - kick it back to the queue
+					glog.V(3).Info("DNSEndpoint has been created since we last checked - retrying")
+					return fmt.Errorf("DNSEndpoint has already been created")
+				}
 				glog.Errorf("Error creating DNSEndpoint for VirtualServer resource: %v", err)
 				rec.Eventf(vs, corev1.EventTypeWarning, reasonBadConfig, "Error creating DNSEndpoint for VirtualServer resource %s", err)
 				return err
@@ -136,17 +143,14 @@ func getValidTargets(endpoints []vsapi.ExternalEndpoint) (extdnsapi.Targets, str
 	return targets, recordType, err
 }
 
-func buildDNSEndpoint(extdnsLister []extdnslisters.DNSEndpointLister, vs *vsapi.VirtualServer, targets extdnsapi.Targets, recordType string) (*extdnsapi.DNSEndpoint, *extdnsapi.DNSEndpoint, error) {
+func buildDNSEndpoint(extdnsLister extdnslisters.DNSEndpointLister, vs *vsapi.VirtualServer, targets extdnsapi.Targets, recordType string) (*extdnsapi.DNSEndpoint, *extdnsapi.DNSEndpoint, error) {
 	var updateDNSEndpoint *extdnsapi.DNSEndpoint
 	var newDNSEndpoint *extdnsapi.DNSEndpoint
 	var existingDNSEndpoint *extdnsapi.DNSEndpoint
 	var err error
-	for _, el := range extdnsLister {
-		existingDNSEndpoint, err = el.DNSEndpoints(vs.Namespace).Get(vs.ObjectMeta.Name)
-		if err == nil {
-			break
-		}
-	}
+
+	existingDNSEndpoint, err = extdnsLister.DNSEndpoints(vs.Namespace).Get(vs.ObjectMeta.Name)
+
 	if !apierrors.IsNotFound(err) && err != nil {
 		return nil, nil, err
 	}
@@ -176,7 +180,7 @@ func buildDNSEndpoint(extdnsLister []extdnslisters.DNSEndpointLister, vs *vsapi.
 	vs = vs.DeepCopy()
 
 	if existingDNSEndpoint != nil {
-		glog.V(3).Infof("DNDEndpoint already exist for this object, ensuring it is up to date")
+		glog.V(3).Infof("DNSEndpoint already exists for this object, ensuring it is up to date")
 		if metav1.GetControllerOf(existingDNSEndpoint) == nil {
 			glog.V(3).Infof("DNSEndpoint has no owner. refusing to update non-owned resource")
 			return nil, nil, nil

@@ -1,13 +1,13 @@
 import pytest
 from settings import TEST_DATA
-from suite.custom_assertions import (
+from suite.utils.custom_assertions import (
     assert_event_and_count,
     assert_event_and_get_count,
     assert_event_with_full_equality_and_count,
     wait_and_assert_status_code,
     wait_for_event_count_increases,
 )
-from suite.resources_utils import (
+from suite.utils.resources_utils import (
     create_deployment_with_name,
     create_namespace_with_name_from_yaml,
     create_service_from_yaml,
@@ -23,7 +23,7 @@ from suite.resources_utils import (
     replace_service,
     wait_before_test,
 )
-from suite.vs_vsr_resources_utils import get_vs_nginx_template_conf
+from suite.utils.vs_vsr_resources_utils import get_vs_nginx_template_conf
 
 
 class ExternalNameSetup:
@@ -69,14 +69,15 @@ def vs_externalname_setup(
     ensure_response_from_backend(virtual_server_setup.backend_1_url, virtual_server_setup.vs_host)
 
     def fin():
-        print("Clean up ExternalName Setup:")
-        delete_namespace(kube_apis.v1, external_ns)
-        replace_configmap(
-            kube_apis.v1,
-            config_map_name,
-            ingress_controller_prerequisites.namespace,
-            ingress_controller_prerequisites.config_map,
-        )
+        if request.config.getoption("--skip-fixture-teardown") == "no":
+            print("Clean up ExternalName Setup:")
+            delete_namespace(kube_apis.v1, external_ns)
+            replace_configmap(
+                kube_apis.v1,
+                config_map_name,
+                ingress_controller_prerequisites.namespace,
+                ingress_controller_prerequisites.config_map,
+            )
 
     request.addfinalizer(fin)
 

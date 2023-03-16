@@ -1,8 +1,8 @@
 import pytest
 import requests
 from settings import TEST_DATA
-from suite.fixtures import PublicEndpoint
-from suite.resources_utils import (
+from suite.fixtures.fixtures import PublicEndpoint
+from suite.utils.resources_utils import (
     create_example_app,
     create_items_from_yaml,
     create_secret_from_yaml,
@@ -15,7 +15,7 @@ from suite.resources_utils import (
     wait_before_test,
     wait_until_all_pods_are_ready,
 )
-from suite.yaml_utils import get_first_ingress_host_from_yaml
+from suite.utils.yaml_utils import get_first_ingress_host_from_yaml
 
 
 class JWTAuthMergeableSetup:
@@ -60,19 +60,20 @@ def jwt_auth_setup(
     wait_before_test(2)
 
     def fin():
-        print("Delete Master Secret:")
-        if is_secret_present(kube_apis.v1, master_secret_name, test_namespace):
-            delete_secret(kube_apis.v1, master_secret_name, test_namespace)
+        if request.config.getoption("--skip-fixture-teardown") == "no":
+            print("Delete Master Secret:")
+            if is_secret_present(kube_apis.v1, master_secret_name, test_namespace):
+                delete_secret(kube_apis.v1, master_secret_name, test_namespace)
 
-        print("Delete Minion Secret:")
-        if is_secret_present(kube_apis.v1, minion_secret_name, test_namespace):
-            delete_secret(kube_apis.v1, minion_secret_name, test_namespace)
+            print("Delete Minion Secret:")
+            if is_secret_present(kube_apis.v1, minion_secret_name, test_namespace):
+                delete_secret(kube_apis.v1, minion_secret_name, test_namespace)
 
-        print("Clean up the JWT Auth Mergeable Minions Application:")
-        delete_common_app(kube_apis, "simple", test_namespace)
-        delete_items_from_yaml(
-            kube_apis, f"{TEST_DATA}/jwt-auth-mergeable/mergeable/jwt-auth-ingress.yaml", test_namespace
-        )
+            print("Clean up the JWT Auth Mergeable Minions Application:")
+            delete_common_app(kube_apis, "simple", test_namespace)
+            delete_items_from_yaml(
+                kube_apis, f"{TEST_DATA}/jwt-auth-mergeable/mergeable/jwt-auth-ingress.yaml", test_namespace
+            )
 
     request.addfinalizer(fin)
 
@@ -88,7 +89,7 @@ def get_token_from_file(token_type) -> str:
     :param token_type: 'master' or 'minion'
     :return: str
     """
-    with open(f"{TEST_DATA}/jwt-auth-mergeable/tokens/jwt-auth-{token_type}-token.jwt", "r") as token_file:
+    with open(f"{TEST_DATA}/jwt-auth-mergeable/tokens/jwt-auth-{token_type}-token.jwt") as token_file:
         return token_file.read().replace("\n", "")
 
 

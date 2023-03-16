@@ -1,8 +1,8 @@
-# syntax=docker/dockerfile:1.4
+# syntax=docker/dockerfile:1.5
 # this is here so we can grab the latest version of kind and have dependabot keep it up to date
-FROM kindest/node:v1.25.2
+FROM kindest/node:v1.26.2
 
-FROM python:3.10
+FROM python:3.11
 
 RUN apt-get update \
 	&& apt-get install -y curl git \
@@ -11,7 +11,7 @@ RUN apt-get update \
 WORKDIR /workspace/tests
 
 COPY --link tests/requirements.txt /workspace/tests/
-RUN pip install -r requirements.txt
+RUN pip install --require-hashes -r requirements.txt
 
 COPY --link deployments /workspace/deployments
 

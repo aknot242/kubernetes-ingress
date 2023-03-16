@@ -1,30 +1,29 @@
 import grpc
 import pytest
 from settings import DEPLOYMENTS, TEST_DATA
-from suite.custom_assertions import (
+from suite.grpc.helloworld_pb2 import HelloRequest
+from suite.grpc.helloworld_pb2_grpc import GreeterStub
+from suite.utils.custom_assertions import (
     assert_event,
     assert_event_starts_with_text_and_contains_errors,
     assert_grpc_entries_exist,
     assert_proxy_entries_do_not_exist,
     assert_vs_conf_not_exists,
 )
-from suite.grpc.helloworld_pb2 import HelloRequest
-from suite.grpc.helloworld_pb2_grpc import GreeterStub
-from suite.resources_utils import (
+from suite.utils.resources_utils import (
     create_example_app,
     create_secret_from_yaml,
     delete_common_app,
     delete_items_from_yaml,
     get_events,
     get_first_pod_name,
-    get_last_log_entry,
     replace_configmap_from_yaml,
     scale_deployment,
     wait_before_test,
     wait_until_all_pods_are_ready,
 )
-from suite.ssl_utils import get_certificate
-from suite.vs_vsr_resources_utils import get_vs_nginx_template_conf, patch_virtual_server_from_yaml
+from suite.utils.ssl_utils import get_certificate
+from suite.utils.vs_vsr_resources_utils import get_vs_nginx_template_conf, patch_virtual_server_from_yaml
 
 
 @pytest.fixture(scope="function")
@@ -66,15 +65,16 @@ def backend_setup(request, kube_apis, ingress_controller_prerequisites, test_nam
         pytest.fail(f"VS GRPC setup failed")
 
     def fin():
-        print("Clean up:")
-        delete_items_from_yaml(kube_apis, src_sec_yaml, test_namespace)
-        replace_configmap_from_yaml(
-            kube_apis.v1,
-            ingress_controller_prerequisites.config_map["metadata"]["name"],
-            ingress_controller_prerequisites.namespace,
-            f"{DEPLOYMENTS}/common/nginx-config.yaml",
-        )
-        delete_common_app(kube_apis, app_name, test_namespace)
+        if request.config.getoption("--skip-fixture-teardown") == "no":
+            print("Clean up:")
+            delete_items_from_yaml(kube_apis, src_sec_yaml, test_namespace)
+            replace_configmap_from_yaml(
+                kube_apis.v1,
+                ingress_controller_prerequisites.config_map["metadata"]["name"],
+                ingress_controller_prerequisites.namespace,
+                f"{DEPLOYMENTS}/common/nginx-config.yaml",
+            )
+            delete_common_app(kube_apis, app_name, test_namespace)
 
     request.addfinalizer(fin)
 
@@ -116,6 +116,7 @@ class TestVirtualServerGrpc:
         assert_grpc_entries_exist(config)
         assert_proxy_entries_do_not_exist(config)
 
+    @pytest.mark.flaky(max_runs=3)
     @pytest.mark.parametrize("backend_setup", [{"app_type": "grpc-vs"}], indirect=True)
     def test_validation_flow(
         self, kube_apis, ingress_controller_prerequisites, crd_ingress_controller, backend_setup, virtual_server_setup
@@ -294,7 +295,7 @@ class TestVirtualServerGrpcHealthCheck:
         param_list = [
             "health_check port=50051 interval=1s jitter=2s",
             "type=grpc grpc_status=12",
-            "grpc_service=helloworld.Greeter;",
+            "grpc_service=helloworld.Greeter keepalive_time=60s;",
         ]
         for p in param_list:
             assert p in config

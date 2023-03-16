@@ -2,12 +2,11 @@ import os
 import tempfile
 
 import pytest
-import requests
 import yaml
 from settings import TEST_DATA
-from suite.custom_assertions import wait_and_assert_status_code
-from suite.fixtures import PublicEndpoint
-from suite.resources_utils import (
+from suite.fixtures.fixtures import PublicEndpoint
+from suite.utils.custom_assertions import wait_and_assert_status_code
+from suite.utils.resources_utils import (
     create_example_app,
     create_items_from_yaml,
     create_secret_from_yaml,
@@ -25,7 +24,7 @@ from suite.resources_utils import (
     wait_until_all_pods_are_ready,
     write_to_json,
 )
-from suite.yaml_utils import get_first_ingress_host_from_yaml
+from suite.utils.yaml_utils import get_first_ingress_host_from_yaml
 
 paths = ["backend1", "backend2"]
 reload_times = {}
@@ -45,7 +44,7 @@ class SmokeSetup:
         self.ingress_host = ingress_host
 
 
-@pytest.fixture(scope="class", params=["standard", "mergeable"])
+@pytest.fixture(scope="class", params=["standard", "mergeable", "implementation-specific-pathtype"])
 def smoke_setup(request, kube_apis, ingress_controller_endpoint, ingress_controller, test_namespace) -> SmokeSetup:
     print("------------------------- Deploy Smoke Example -----------------------------------")
     secret_name = create_secret_from_yaml(kube_apis.v1, test_namespace, f"{TEST_DATA}/smoke/smoke-secret.yaml")
@@ -60,11 +59,12 @@ def smoke_setup(request, kube_apis, ingress_controller_endpoint, ingress_control
     )
 
     def fin():
-        print("Clean up the Smoke Application:")
-        delete_common_app(kube_apis, "simple", test_namespace)
-        delete_items_from_yaml(kube_apis, f"{TEST_DATA}/smoke/{request.param}/smoke-ingress.yaml", test_namespace)
-        delete_secret(kube_apis.v1, secret_name, test_namespace)
-        write_to_json(f"reload-{get_test_file_name(request.node.fspath)}.json", reload_times)
+        if request.config.getoption("--skip-fixture-teardown") == "no":
+            print("Clean up the Smoke Application:")
+            delete_common_app(kube_apis, "simple", test_namespace)
+            delete_items_from_yaml(kube_apis, f"{TEST_DATA}/smoke/{request.param}/smoke-ingress.yaml", test_namespace)
+            delete_secret(kube_apis.v1, secret_name, test_namespace)
+            write_to_json(f"reload-{get_test_file_name(request.node.fspath)}.json", reload_times)
 
     request.addfinalizer(fin)
 

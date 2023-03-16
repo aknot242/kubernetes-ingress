@@ -3,8 +3,8 @@ from base64 import b64encode
 import pytest
 import requests
 from settings import TEST_DATA
-from suite.fixtures import PublicEndpoint
-from suite.resources_utils import (
+from suite.fixtures.fixtures import PublicEndpoint
+from suite.utils.resources_utils import (
     create_example_app,
     create_items_from_yaml,
     create_secret_from_yaml,
@@ -17,7 +17,7 @@ from suite.resources_utils import (
     wait_before_test,
     wait_until_all_pods_are_ready,
 )
-from suite.yaml_utils import get_first_ingress_host_from_yaml
+from suite.utils.yaml_utils import get_first_ingress_host_from_yaml
 
 
 def to_base64(b64_string):
@@ -74,19 +74,22 @@ def auth_basic_auth_setup(
     wait_before_test(2)
 
     def fin():
-        print("Delete Master Secret:")
-        if is_secret_present(kube_apis.v1, master_secret_name, test_namespace):
-            delete_secret(kube_apis.v1, master_secret_name, test_namespace)
+        if request.config.getoption("--skip-fixture-teardown") == "no":
+            print("Delete Master Secret:")
+            if is_secret_present(kube_apis.v1, master_secret_name, test_namespace):
+                delete_secret(kube_apis.v1, master_secret_name, test_namespace)
 
-        print("Delete Minion Secret:")
-        if is_secret_present(kube_apis.v1, minion_secret_name, test_namespace):
-            delete_secret(kube_apis.v1, minion_secret_name, test_namespace)
+            print("Delete Minion Secret:")
+            if is_secret_present(kube_apis.v1, minion_secret_name, test_namespace):
+                delete_secret(kube_apis.v1, minion_secret_name, test_namespace)
 
-        print("Clean up the Auth Basic Auth Mergeable Minions Application:")
-        delete_common_app(kube_apis, "simple", test_namespace)
-        delete_items_from_yaml(
-            kube_apis, f"{TEST_DATA}/auth-basic-auth-mergeable/mergeable/auth-basic-auth-ingress.yaml", test_namespace
-        )
+            print("Clean up the Auth Basic Auth Mergeable Minions Application:")
+            delete_common_app(kube_apis, "simple", test_namespace)
+            delete_items_from_yaml(
+                kube_apis,
+                f"{TEST_DATA}/auth-basic-auth-mergeable/mergeable/auth-basic-auth-ingress.yaml",
+                test_namespace,
+            )
 
     request.addfinalizer(fin)
 
@@ -103,7 +106,7 @@ def get_credentials_from_file(creds_type) -> str:
     :return: str
     """
     with open(
-        f"{TEST_DATA}/auth-basic-auth-mergeable/credentials/auth-basic-auth-{creds_type}-credentials.txt", "r"
+        f"{TEST_DATA}/auth-basic-auth-mergeable/credentials/auth-basic-auth-{creds_type}-credentials.txt"
     ) as credentials_file:
         return credentials_file.read().replace("\n", "")
 

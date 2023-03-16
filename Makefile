@@ -6,8 +6,8 @@ VERSION = $(GIT_TAG)-SNAPSHOT-$(GIT_COMMIT_SHORT)
 PLUS_ARGS = --secret id=nginx-repo.crt,src=nginx-repo.crt --secret id=nginx-repo.key,src=nginx-repo.key
 
 # variables that can be overridden by the user
-PREFIX = nginx/nginx-ingress## The name of the image. For example, nginx/nginx-ingress
-TAG = $(VERSION:v%=%)## The tag of the image. For example, 2.0.0
+PREFIX ?= nginx/nginx-ingress## The name of the image. For example, nginx/nginx-ingress
+TAG ?= $(VERSION:v%=%)## The tag of the image. For example, 2.0.0
 TARGET ?= local## The target of the build. Possible values: local, container and download
 override DOCKER_BUILD_OPTIONS += --build-arg IC_VERSION=$(VERSION) --build-arg GIT_COMMIT=$(GIT_COMMIT)## The options for the docker build command. For example, --pull.
 ARCH ?= amd64## The architecture of the image or binary. For example: amd64, arm64, ppc64le, s390x. Not all architectures are supported for all targets.
@@ -38,6 +38,11 @@ lint-python: ## Run linter for python tests
 	@black --version || (code=$$?; printf "\033[0;31mError\033[0m: there was a problem with black, use 'brew install black' to install it\n"; exit $$code)
 	@isort .
 	@black .
+
+.PHONY: staticcheck
+staticcheck: ## Run staticcheck linter
+	@staticcheck -version >/dev/null 2>&1 || go install honnef.co/go/tools/cmd/staticcheck@2022.1.3;
+	staticcheck ./...
 
 .PHONY: test
 test: ## Run tests
@@ -110,7 +115,7 @@ debian-image-plus: build ## Create Docker image for Ingress Controller (Debian w
 
 .PHONY: debian-image-nap-plus
 debian-image-nap-plus: build ## Create Docker image for Ingress Controller (Debian with NGINX Plus and App Protect WAF)
-	$(DOCKER_CMD) $(PLUS_ARGS) --build-arg BUILD_OS=debian-plus-nap --build-arg DEBIAN_VERSION=buster-slim --build-arg NAP_MODULES=waf
+	$(DOCKER_CMD) $(PLUS_ARGS) --build-arg BUILD_OS=debian-plus-nap --build-arg NAP_MODULES=waf
 
 .PHONY: debian-image-dos-plus
 debian-image-dos-plus: build ## Create Docker image for Ingress Controller (Debian with NGINX Plus and App Protect DoS)
@@ -118,7 +123,7 @@ debian-image-dos-plus: build ## Create Docker image for Ingress Controller (Debi
 
 .PHONY: debian-image-nap-dos-plus
 debian-image-nap-dos-plus: build ## Create Docker image for Ingress Controller (Debian with NGINX Plus, App Protect WAF and DoS)
-	$(DOCKER_CMD) $(PLUS_ARGS) --build-arg BUILD_OS=debian-plus-nap --build-arg DEBIAN_VERSION=buster-slim --build-arg NAP_MODULES=waf,dos
+	$(DOCKER_CMD) $(PLUS_ARGS) --build-arg BUILD_OS=debian-plus-nap --build-arg NAP_MODULES=waf,dos
 
 .PHONY: ubi-image
 ubi-image: build ## Create Docker image for Ingress Controller (UBI)

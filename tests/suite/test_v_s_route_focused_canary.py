@@ -2,16 +2,16 @@ import pytest
 import requests
 import yaml
 from settings import TEST_DATA
-from suite.custom_resource_fixtures import VirtualServerRoute
-from suite.resources_utils import (
+from suite.fixtures.custom_resource_fixtures import VirtualServerRoute
+from suite.utils.resources_utils import (
     create_example_app,
     create_namespace_with_name_from_yaml,
     delete_namespace,
     ensure_response_from_backend,
     wait_until_all_pods_are_ready,
 )
-from suite.vs_vsr_resources_utils import create_v_s_route_from_yaml, create_virtual_server_from_yaml
-from suite.yaml_utils import get_first_host_from_yaml, get_paths_from_vsr_yaml, get_route_namespace_from_vs_yaml
+from suite.utils.vs_vsr_resources_utils import create_v_s_route_from_yaml, create_virtual_server_from_yaml
+from suite.utils.yaml_utils import get_first_host_from_yaml, get_paths_from_vsr_yaml, get_route_namespace_from_vs_yaml
 from yaml.loader import Loader
 
 
@@ -105,8 +105,9 @@ def vsr_canary_setup(
     wait_until_all_pods_are_ready(kube_apis.v1, ns_1)
 
     def fin():
-        print("Delete test namespace")
-        delete_namespace(kube_apis.v1, ns_1)
+        if request.config.getoption("--skip-fixture-teardown") == "no":
+            print("Delete test namespace")
+            delete_namespace(kube_apis.v1, ns_1)
 
     request.addfinalizer(fin)
 
@@ -138,9 +139,16 @@ class TestVSRFocusedCanaryRelease:
 
         counter_v1, counter_v2 = 0, 0
         for _ in range(100):
-            resp = requests.get(
-                vsr_canary_setup.backends_url, headers={"host": vsr_canary_setup.vs_host, "x-version": "canary"}
+            ensure_response_from_backend(
+                vsr_canary_setup.backends_url, vsr_canary_setup.vs_host, {"x-version": "canary"}, check404=True
             )
+            status_code = 502
+            while status_code == 502:
+                resp = requests.get(
+                    vsr_canary_setup.backends_url, headers={"host": vsr_canary_setup.vs_host, "x-version": "canary"}
+                )
+                status_code = resp.status_code
+
             if upstreams[0] in resp.text in resp.text:
                 counter_v1 = counter_v1 + 1
             elif upstreams[1] in resp.text in resp.text:

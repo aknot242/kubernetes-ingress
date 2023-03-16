@@ -266,7 +266,7 @@ Reloading NGINX is necessary to apply the new configuration and involves the fol
 1. The administrator sends a HUP (hangup) signal to the NGINX master process to trigger a reload.
 1. The master process brings down the worker processes with the old configuration and starts worker processes with the new configuration.
 1. The administrator verifies the reload has successfully finished.
-  
+
 > Refer to the [NGINX documentation](https://nginx.org/en/docs/control.html#reconfiguration) for more details about reloading. See also [this blog post](https://www.nginx.com/blog/inside-nginx-how-we-designed-for-performance-scale/) for an overview of the NGINX architecture.
 
 #### How to Reload
@@ -298,18 +298,18 @@ Since both the old and new NGINX worker processes coexist during a reload, reloa
 
 ### Reloading in the IC
 
-The Ingress Controller reloads NGINX to apply configuration changes. 
+The Ingress Controller reloads NGINX to apply configuration changes.
 
-To facilitate reloading, the Ingress Controller configures a server listening on the Unix socket `unix:/var/lib/nginx/nginx-config-version.sock` that responds with the config version for `/configVersion` URI. The Ingress Controller writes the config to  `/etc/nginx/config-version.conf`. 
+To facilitate reloading, the Ingress Controller configures a server listening on the Unix socket `unix:/var/lib/nginx/nginx-config-version.sock` that responds with the config version for `/configVersion` URI. The Ingress Controller writes the config to  `/etc/nginx/config-version.conf`.
 
 A reload involves multiple steps:
 1. The Ingress Controller updates generated configuration files, including any secrets.
-1. The Ingress Controller updates the config version in `/etc/nginx/config-version.conf`. 
+1. The Ingress Controller updates the config version in `/etc/nginx/config-version.conf`.
 1. The Ingress Controller runs `nginx -s reload`. If the command fails, the Ingress Controller logs the error and considers the reload failed.
 2. Assuming the command succeeds, the Ingress Controller periodically checks for the config version by sending an HTTP request to the config version server on  `unix:/var/lib/nginx/nginx-config-version.sock`.
 3. Once the Ingress Controller sees the correct config version returned by NGINX, it considers the reload successful. If it doesn't see the correct config version after the configurable timeout (see `-nginx-reload-timeout` [cli argument](/nginx-ingress-controller/configuration/global-configuration/command-line-arguments), the Ingress Controller considers the reload failed.
 
-> The [Ingress Controler Control Loop](#the-control-loop) stops during a reload so that it cannot change any configuration files or reload NGINX until the current reload succeeds or fails.
+> The [Ingress Controller Control Loop](#the-control-loop) stops during a reload so that it cannot change any configuration files or reload NGINX until the current reload succeeds or fails.
 
 ### When the Ingress Controller Reloads NGINX
 
@@ -317,5 +317,5 @@ The Ingress Controller reloads NGINX every time the Control Loop processes a cha
 
 There are three special cases:
 - *Start*. When the Ingress Controller starts, it processes all resources in the cluster and only then reloads NGINX. This avoids creating a "reload storm" by reloading only once.
-- *Batch updates*. When the Ingress Controller receives a number of concurrent requests from the Kubernetes API, it will pause NGINX reloads untill the task queue is empty. This reduces the number of reloads to minimize the impact of batch updates and reduce the risk of OOM (Out of Memory) errors.
+- *Batch updates*. When the Ingress Controller receives a number of concurrent requests from the Kubernetes API, it will pause NGINX reloads until the task queue is empty. This reduces the number of reloads to minimize the impact of batch updates and reduce the risk of OOM (Out of Memory) errors.
 - *NGINX Plus*. If the Ingress Controller uses NGINX Plus, it will not reload NGINX Plus for changes to the Endpoints resources. In this case, the Ingress Controller will use the NGINX Plus API to update the corresponding upstreams and skip reloading.

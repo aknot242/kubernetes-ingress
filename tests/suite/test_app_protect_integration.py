@@ -2,7 +2,7 @@ import pytest
 import requests
 import yaml
 from settings import DEPLOYMENTS, TEST_DATA
-from suite.ap_resources_utils import (
+from suite.utils.ap_resources_utils import (
     create_ap_logconf_from_yaml,
     create_ap_policy_from_yaml,
     create_ap_usersig_from_yaml,
@@ -11,7 +11,7 @@ from suite.ap_resources_utils import (
     delete_ap_policy,
     read_ap_custom_resource,
 )
-from suite.resources_utils import (
+from suite.utils.resources_utils import (
     clear_file_contents,
     create_example_app,
     create_ingress,
@@ -33,7 +33,7 @@ from suite.resources_utils import (
     wait_until_all_pods_are_ready,
     write_to_json,
 )
-from suite.yaml_utils import get_first_ingress_host_from_yaml
+from suite.utils.yaml_utils import get_first_ingress_host_from_yaml
 
 src_ing_yaml = f"{TEST_DATA}/appprotect/appprotect-ingress.yaml"
 ap_policy = "dataguard-alarm"
@@ -99,14 +99,15 @@ def appprotect_setup(request, kube_apis, ingress_controller_endpoint, test_names
     create_items_from_yaml(kube_apis, src_syslog_yaml, test_namespace)
 
     def fin():
-        print("Clean up:")
-        delete_items_from_yaml(kube_apis, src_syslog_yaml, test_namespace)
-        delete_ap_policy(kube_apis.custom_objects, pol_name, test_namespace)
-        delete_ap_logconf(kube_apis.custom_objects, log_name, test_namespace)
-        delete_common_app(kube_apis, "simple", test_namespace)
-        src_sec_yaml = f"{TEST_DATA}/appprotect/appprotect-secret.yaml"
-        delete_items_from_yaml(kube_apis, src_sec_yaml, test_namespace)
-        write_to_json(f"reload-{get_test_file_name(request.node.fspath)}.json", reload_times)
+        if request.config.getoption("--skip-fixture-teardown") == "no":
+            print("Clean up:")
+            delete_items_from_yaml(kube_apis, src_syslog_yaml, test_namespace)
+            delete_ap_policy(kube_apis.custom_objects, pol_name, test_namespace)
+            delete_ap_logconf(kube_apis.custom_objects, log_name, test_namespace)
+            delete_common_app(kube_apis, "simple", test_namespace)
+            src_sec_yaml = f"{TEST_DATA}/appprotect/appprotect-secret.yaml"
+            delete_items_from_yaml(kube_apis, src_sec_yaml, test_namespace)
+            write_to_json(f"reload-{get_test_file_name(request.node.fspath)}.json", reload_times)
 
     request.addfinalizer(fin)
 

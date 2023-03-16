@@ -1,7 +1,7 @@
 import pytest
 import requests
 from settings import TEST_DATA
-from suite.resources_utils import (
+from suite.utils.resources_utils import (
     create_example_app,
     create_items_from_yaml,
     delete_common_app,
@@ -11,7 +11,7 @@ from suite.resources_utils import (
     wait_before_test,
     wait_until_all_pods_are_ready,
 )
-from suite.yaml_utils import get_first_ingress_host_from_yaml
+from suite.utils.yaml_utils import get_first_ingress_host_from_yaml
 
 
 class BackendSetup:
@@ -60,11 +60,12 @@ def backend_setup(request, kube_apis, ingress_controller_endpoint, test_namespac
     wait_before_test(2)
 
     def fin():
-        print("Clean up:")
-        delete_common_app(kube_apis, "simple", test_namespace)
-        for item in ingresses_under_test:
-            src_ing_yaml = f"{TEST_DATA}/ingress-class/{item}-ingress.yaml"
-            delete_items_from_yaml(kube_apis, src_ing_yaml, test_namespace)
+        if request.config.getoption("--skip-fixture-teardown") == "no":
+            print("Clean up:")
+            delete_common_app(kube_apis, "simple", test_namespace)
+            for item in ingresses_under_test:
+                src_ing_yaml = f"{TEST_DATA}/ingress-class/{item}-ingress.yaml"
+                delete_items_from_yaml(kube_apis, src_ing_yaml, test_namespace)
 
     request.addfinalizer(fin)
 

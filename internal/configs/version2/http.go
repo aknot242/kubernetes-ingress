@@ -119,12 +119,14 @@ type OIDC struct {
 	TokenEndpoint  string
 	RedirectURI    string
 	ZoneSyncLeeway int
+	AuthExtraArgs  string
 }
 
 // WAF defines WAF configuration.
 type WAF struct {
 	Enable              string
 	ApPolicy            string
+	ApBundle            string
 	ApSecurityLogEnable bool
 	ApLogConf           []string
 }
@@ -257,6 +259,7 @@ type HealthCheck struct {
 	GRPCService         string
 	Mandatory           bool
 	Persistent          bool
+	KeepaliveTime       string
 }
 
 // TLSRedirect defines a redirect in a Server.
@@ -350,9 +353,19 @@ func (rl LimitReqOptions) String() string {
 
 // JWTAuth holds JWT authentication configuration.
 type JWTAuth struct {
-	Secret string
-	Realm  string
-	Token  string
+	Secret   string
+	Realm    string
+	Token    string
+	KeyCache string
+	JwksURI  JwksURI
+}
+
+// JwksURI defines the components of a JwksURI
+type JwksURI struct {
+	JwksScheme string
+	JwksHost   string
+	JwksPort   string
+	JwksPath   string
 }
 
 // BasicAuth refers to basic HTTP authentication mechanism options
