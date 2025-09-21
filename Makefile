@@ -2,8 +2,9 @@
 VER = $(shell grep IC_VERSION .github/data/version.txt | cut -d '=' -f 2)
 GIT_TAG = $(shell git describe --exact-match --tags || echo untagged)
 VERSION = $(VER)-SNAPSHOT
-NGINX_OSS_VERSION             ?= 1.27
-NGINX_PLUS_VERSION            ?= R34
+NGINX_OSS_VERSION             ?= 1.29
+NGINX_PLUS_VERSION            ?= R35
+NGINX_AGENT_VERSION           ?= 3.3
 PLUS_ARGS = --build-arg NGINX_PLUS_VERSION=$(NGINX_PLUS_VERSION) --secret id=nginx-repo.crt,src=nginx-repo.crt --secret id=nginx-repo.key,src=nginx-repo.key
 
 # Variables that can be overridden
@@ -99,6 +100,7 @@ update-crds: ## Update CRDs
 	kustomize build config/crd >deploy/crds.yaml
 	kustomize build config/crd/app-protect-dos --load-restrictor='LoadRestrictionsNone' >deploy/crds-nap-dos.yaml
 	kustomize build config/crd/app-protect-waf --load-restrictor='LoadRestrictionsNone' >deploy/crds-nap-waf.yaml
+	$(MAKE) update-crd-docs
 
 .PHONY: telemetry-schema
 telemetry-schema: ## Generate the telemetry Schema
@@ -135,19 +137,19 @@ build-goreleaser: ## Build Ingress Controller binary using GoReleaser
 
 .PHONY: debian-image
 debian-image: build ## Create Docker image for Ingress Controller (Debian)
-	$(DOCKER_CMD) --build-arg BUILD_OS=debian --build-arg NGINX_OSS_VERSION=$(NGINX_OSS_VERSION)
+	$(DOCKER_CMD) --build-arg BUILD_OS=debian --build-arg NGINX_OSS_VERSION=$(NGINX_OSS_VERSION) --build-arg NGINX_AGENT_VERSION=$(NGINX_AGENT_VERSION)
 
 .PHONY: alpine-image
 alpine-image: build ## Create Docker image for Ingress Controller (Alpine)
-	$(DOCKER_CMD) --build-arg BUILD_OS=alpine --build-arg NGINX_OSS_VERSION=$(NGINX_OSS_VERSION)
+	$(DOCKER_CMD) --build-arg BUILD_OS=alpine --build-arg NGINX_OSS_VERSION=$(NGINX_OSS_VERSION) --build-arg NGINX_AGENT_VERSION=$(NGINX_AGENT_VERSION)
 
 .PHONY: alpine-image-plus
 alpine-image-plus: build ## Create Docker image for Ingress Controller (Alpine with NGINX Plus)
-	$(DOCKER_CMD) $(PLUS_ARGS) --build-arg BUILD_OS=alpine-plus
+	$(DOCKER_CMD) $(PLUS_ARGS) --build-arg BUILD_OS=alpine-plus --build-arg NGINX_AGENT_VERSION=$(NGINX_AGENT_VERSION)
 
 .PHONY: alpine-image-plus-fips
 alpine-image-plus-fips: build ## Create Docker image for Ingress Controller (Alpine with NGINX Plus and FIPS)
-	$(DOCKER_CMD) $(PLUS_ARGS) --build-arg BUILD_OS=alpine-plus-fips
+	$(DOCKER_CMD) $(PLUS_ARGS) --build-arg BUILD_OS=alpine-plus-fips --build-arg NGINX_AGENT_VERSION=$(NGINX_AGENT_VERSION)
 
 .PHONY: alpine-image-nap-plus-fips
 alpine-image-nap-plus-fips: build ## Create Docker image for Ingress Controller (Alpine with NGINX Plus, NGINX App Protect WAF and FIPS)
@@ -160,7 +162,7 @@ alpine-image-nap-v5-plus-fips: build ## Create Docker image for Ingress Controll
 
 .PHONY: debian-image-plus
 debian-image-plus: build ## Create Docker image for Ingress Controller (Debian with NGINX Plus)
-	$(DOCKER_CMD) $(PLUS_ARGS) --build-arg BUILD_OS=debian-plus
+	$(DOCKER_CMD) $(PLUS_ARGS) --build-arg BUILD_OS=debian-plus --build-arg NGINX_AGENT_VERSION=$(NGINX_AGENT_VERSION)
 
 .PHONY: debian-image-nap-plus
 debian-image-nap-plus: build ## Create Docker image for Ingress Controller (Debian with NGINX Plus and NGINX App Protect WAF)
@@ -180,11 +182,11 @@ debian-image-nap-dos-plus: build ## Create Docker image for Ingress Controller (
 
 .PHONY: ubi-image
 ubi-image: build ## Create Docker image for Ingress Controller (UBI)
-	$(DOCKER_CMD) --build-arg BUILD_OS=ubi --build-arg NGINX_OSS_VERSION=$(NGINX_OSS_VERSION)
+	$(DOCKER_CMD) --build-arg BUILD_OS=ubi --build-arg NGINX_OSS_VERSION=$(NGINX_OSS_VERSION) --build-arg NGINX_AGENT_VERSION=$(NGINX_AGENT_VERSION)
 
 .PHONY: ubi-image-plus
 ubi-image-plus: build ## Create Docker image for Ingress Controller (UBI with NGINX Plus)
-	$(DOCKER_CMD) $(PLUS_ARGS) --build-arg BUILD_OS=ubi-9-plus
+	$(DOCKER_CMD) $(PLUS_ARGS) --build-arg BUILD_OS=ubi-9-plus --build-arg NGINX_AGENT_VERSION=$(NGINX_AGENT_VERSION)
 
 .PHONY: ubi-image-nap-plus
 ubi-image-nap-plus: build ## Create Docker image for Ingress Controller (UBI with NGINX Plus and NGINX App Protect WAF)
@@ -240,3 +242,9 @@ clean-cache: ## Clean go cache
 rebuild-test-img:
 	cd tests && \
 	make build
+
+.PHONY: update-crd-docs
+update-crd-docs: ## Update CRD markdown documentation from YAML definitions
+	@echo "Generating CRD documentation..."
+	@go run hack/generate-crd-docs.go -crd-dir config/crd/bases -output-dir docs/crd
+	@echo "CRD documentation updated successfully!"
